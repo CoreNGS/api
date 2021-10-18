@@ -1514,8 +1514,8 @@ namespace ngs::proc {
     child_proc_id[index] = proc_id; std::this_thread::sleep_for(std::chrono::milliseconds(5));
     proc_did_execute[index] = true; PROCESS proc_index = (PROCESS)proc_id;
     stdipt_map.insert(std::make_pair(proc_index, (std::intptr_t)infd));
-    std::thread optThread(output_thread, (std::intptr_t)outfd, proc_index);
-    optThread.join();
+    std::thread opt_thread(output_thread, (std::intptr_t)outfd, proc_index);
+    opt_thread.join();
     #else
     wchar_t cwstr_command[32768];
     std::wstring wstr_command = widen(command); bool proceed = true;
@@ -1542,11 +1542,11 @@ namespace ngs::proc {
       std::this_thread::sleep_for(std::chrono::milliseconds(5)); proc_did_execute[index] = true;
       stdipt_map.insert(std::make_pair(proc_index, (std::intptr_t)(void *)stdin_write));
       MSG msg; HANDLE waitHandles[] = { pi.hProcess, stdout_read };
-      std::thread optThread(output_thread, (std::intptr_t)(void *)stdout_read, proc_index);
+      std::thread opt_thread(output_thread, (std::intptr_t)(void *)stdout_read, proc_index);
       while (MsgWaitForMultipleObjects(2, waitHandles, false, 5, QS_ALLEVENTS) != WAIT_OBJECT_0) {
         message_pump();
       }
-      optThread.join();
+      opt_thread.join();
       CloseHandle(pi.hProcess);
       CloseHandle(pi.hThread);
       CloseHandle(stdout_read);
