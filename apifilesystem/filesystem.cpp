@@ -133,7 +133,7 @@ namespace ngs::fs {
 
     string filename_path(string fname) {
       size_t fp = fname.find_last_of("/\\");
-      return fname.substr(0,fp + 1);
+      return fname.substr(0, fp + 1);
     }
 
     string filename_name(string fname) {
@@ -717,13 +717,13 @@ namespace ngs::fs {
 
   void file_text_write_real(int fd, double val) {
     string str = std::to_string(val);
-    for (int i = 0; i < str.length(); i++) {
+    for (unsigned i = 0; i < str.length(); i++) {
       file_bin_write_byte(fd, str[i]);
     }
   }
 
   void file_text_write_string(int fd, string str) {
-    for (int i = 0; i < str.length(); i++) {
+    for (unsigned i = 0; i < str.length(); i++) {
       file_bin_write_byte(fd, str[i]);
     }
   }
@@ -756,7 +756,7 @@ namespace ngs::fs {
     }
     str.resize(str.length() + 1, ' ');
     str[str.length() - 1] = byte;
-	if (sign) {
+    if (sign) {
       byte = (char)file_bin_read_byte(fd);
       if (byte == '.' && !dot) {
         dot = true;
