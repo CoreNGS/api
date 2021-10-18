@@ -823,5 +823,4 @@ namespace ngs::fs {
     return file_bin_close(fd);
   }
 
-
 } // namespace ngs::fs
