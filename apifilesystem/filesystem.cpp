@@ -1,4 +1,4 @@
-/*
+﻿/*
 
  MIT License
  
@@ -717,13 +717,13 @@ namespace ngs::fs {
 
   void file_text_write_real(int fd, double val) {
     string str = std::to_string(val);
-    for (int i = 0; i < str.length(); i++) {
+    for (unsigned i = 0; i < str.length(); i++) {
       file_bin_write_byte(fd, str[i]);
     }
   }
 
   void file_text_write_string(int fd, string str) {
-    for (int i = 0; i < str.length(); i++) {
+    for (unsigned i = 0; i < str.length(); i++) {
       file_bin_write_byte(fd, str[i]);
     }
   }
