@@ -1483,7 +1483,7 @@ namespace ngs::proc {
   static std::unordered_map<int, bool> proc_did_execute;
 
   #if !defined(_WIN32)
-  static inline PROCID ProcIdFromForkProcId(PROCID proc_id) {
+  static inline PROCID proc_id_from_fork_proc_id(PROCID proc_id) {
     PROCID *pid = nullptr; int pidsize = 0;
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
     proc_id_from_parent_proc_id(proc_id, &pid, &pidsize);
@@ -1497,18 +1497,18 @@ namespace ngs::proc {
     index++;
     #if !defined(_WIN32)
     int infd = 0, outfd = 0;
-    PROCID proc_id = 0, forkProcId = 0, waitProcId = 0;
-    forkProcId = process_execute_helper(command, &infd, &outfd);
-    proc_id = forkProcId; waitProcId = proc_id;
+    PROCID proc_id = 0, fork_proc_id = 0, wait_proc_id = 0;
+    fork_proc_id = process_execute_helper(command, &infd, &outfd);
+    proc_id = fork_proc_id; wait_proc_id = proc_id;
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    if (forkProcId != -1) {
-      while ((proc_id = ProcIdFromForkProcId(proc_id)) == waitProcId) {
+    if (fork_proc_id != -1) {
+      while ((proc_id = proc_id_from_fork_proc_id(proc_id)) == wait_proc_id) {
         message_pump();
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        int status; waitProcId = waitpid(forkProcId, &status, WNOHANG);
-        char **cmd = nullptr; int cmdsize; cmdline_from_proc_id(forkProcId, &cmd, &cmdsize);
+        int status; wait_proc_id = waitpid(fork_proc_id, &status, WNOHANG);
+        char **cmd = nullptr; int cmdsize; cmdline_from_proc_id(fork_proc_id, &cmd, &cmdsize);
         if (cmd) { if (cmdsize && strcmp(cmd[0], "/bin/sh") == 0) {
-        if (waitProcId > 0) proc_id = waitProcId; } free_cmdline(cmd); }
+        if (wait_proc_id > 0) proc_id = wait_proc_id; } free_cmdline(cmd); }
       }
     } else { proc_id = 0; }
     child_proc_id[index] = proc_id; std::this_thread::sleep_for(std::chrono::milliseconds(5));
