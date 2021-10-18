@@ -390,7 +390,7 @@ namespace ngs::proc {
     }
   }
 
-  void FreeProcId(PROCID *proc_id) {
+  void free_proc_id(PROCID *proc_id) {
     if (proc_id) {
       free(proc_id);
     }
@@ -804,7 +804,7 @@ namespace ngs::proc {
     return cwd;
   }
 
-  void FreeCmdline(char **buffer) {
+  void free_cmdline(char **buffer) {
     if (buffer) {
       delete[] buffer;
     }
@@ -933,7 +933,7 @@ namespace ngs::proc {
     *buffer = arr; *size = i;
   }
 
-  void FreeEnviron(char **buffer) {
+  void free_environ(char **buffer) {
     if (buffer) {
       delete[] buffer;
     }
@@ -1075,7 +1075,7 @@ namespace ngs::proc {
           }
         }
       }
-      FreeEnviron(buffer);
+      free_environ(buffer);
     }
   }
 
@@ -1377,9 +1377,9 @@ namespace ngs::proc {
 
   void free_proc_info(PROCINFO proc_info) {
     if (proc_info_map.find(proc_info) == proc_info_map.end()) return;
-    FreeProcId(proc_info_map[proc_info]->child_process_id);
-    FreeCmdline(proc_info_map[proc_info]->commandline);
-    FreeEnviron(proc_info_map[proc_info]->environment);
+    free_proc_id(proc_info_map[proc_info]->child_process_id);
+    free_cmdline(proc_info_map[proc_info]->commandline);
+    free_environ(proc_info_map[proc_info]->environment);
     #if defined(PROCESS_GUIWINDOW_IMPL)
     free_window_id(proc_info_map[proc_info]->owned_window_id);
     #endif
@@ -1395,7 +1395,7 @@ namespace ngs::proc {
       for (int i = 0; i < size; i++)
         res.push_back(proc_id[i]);
       proc_list_vec.push_back(res);
-      FreeProcId(proc_id);
+      free_proc_id(proc_id);
     }
     procListIndex++;
     return procListIndex;
@@ -1488,7 +1488,7 @@ namespace ngs::proc {
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
     proc_id_from_parent_proc_id(proc_id, &pid, &pidsize);
     if (pid) { if (pidsize) { proc_id = pid[pidsize - 1]; }
-    FreeProcId(pid); }
+    free_proc_id(pid); }
     return proc_id;
   }
   #endif
@@ -1508,7 +1508,7 @@ namespace ngs::proc {
         int status; waitProcId = waitpid(forkProcId, &status, WNOHANG);
         char **cmd = nullptr; int cmdsize; cmdline_from_proc_id(forkProcId, &cmd, &cmdsize);
         if (cmd) { if (cmdsize && strcmp(cmd[0], "/bin/sh") == 0) {
-        if (waitProcId > 0) proc_id = waitProcId; } FreeCmdline(cmd); }
+        if (waitProcId > 0) proc_id = waitProcId; } free_cmdline(cmd); }
       }
     } else { proc_id = 0; }
     child_proc_id[index] = proc_id; std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -1644,7 +1644,7 @@ int main(int argc, char **argv) {
         for (int i = 0; i < size; i++)
           std::cout << buffer[i] << "\0"s;
         std::cout << "\0"s;
-        ngs::proc::FreeCmdline(buffer);
+        ngs::proc::free_cmdline(buffer);
       }
     } else if (strcmp(argv[1], "--env-from-pid") == 0) {
       char **buffer = nullptr; int size = 0;
@@ -1653,7 +1653,7 @@ int main(int argc, char **argv) {
         for (int i = 0; i < size; i++)
           std::cout << buffer[i] << "\0"s;
         std::cout << "\0"s;
-        ngs::proc::FreeEnviron(buffer);
+        ngs::proc::free_environ(buffer);
       }
     }
   }

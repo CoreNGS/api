@@ -85,7 +85,7 @@ namespace ngs::proc {
   #endif
 
   void proc_id_enumerate(PROCID **proc_id, int *size);
-  void FreeProcId(PROCID *proc_id);
+  void free_proc_id(PROCID *proc_id);
   void proc_id_from_self(PROCID *proc_id);
   PROCID proc_id_from_self();
   void parent_proc_id_from_self(PROCID *parent_proc_id);
@@ -101,12 +101,12 @@ namespace ngs::proc {
   bool directory_set_current_working(const char *dname);
   const char *cwd_from_proc_id(PROCID proc_id);
   void cwd_from_proc_id(PROCID proc_id, char **buffer);
-  void FreeCmdline(char **buffer);
+  void free_cmdline(char **buffer);
   void cmdline_from_proc_id(PROCID proc_id, char ***buffer, int *size);
   const char *environment_Get_variable(const char *name);
   bool environment_set_variable(const char *name, const char *value);
   bool environment_unset_variable(const char *name);
-  void FreeEnviron(char **buffer);
+  void free_environ(char **buffer);
   void environ_from_proc_id(PROCID proc_id, char ***buffer, int *size);
   void environ_from_proc_id_ex(PROCID proc_id, const char *name, char **value);
   const char *environ_from_proc_id_ex(PROCID proc_id, const char *name);
