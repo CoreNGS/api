@@ -1223,7 +1223,7 @@ namespace ngs::proc {
   }
 
   static std::vector<std::string> wid_vec_3;
-  void WindowIdEnumerate(WINDOWID **win_id, int *size) {
+  void window_id_enumerate(WINDOWID **win_id, int *size) {
     *win_id = nullptr; *size = 0;
     wid_vec_3.clear(); int i = 0;
     PROCID *pid = nullptr; int pidsize = 0;
@@ -1325,7 +1325,7 @@ namespace ngs::proc {
   static std::unordered_map<PROCINFO, PROCINFO_STRUCT *> proc_info_map;
   static std::vector<std::vector<PROCID>>          proc_list_vec;
 
-  PROCINFO ProcInfoFromProcId(PROCID proc_id) {
+  PROCINFO proc_info_from_proc_id(PROCID proc_id) {
     char *exe    = nullptr; exe_from_proc_id(proc_id, &exe);
     char *cwd    = nullptr; cwd_from_proc_id(proc_id, &cwd);
     PROCID ppid  = 0; parent_proc_id_from_proc_id(proc_id, &ppid);

@@ -110,7 +110,7 @@ namespace ngs::proc {
   void environ_from_proc_id(PROCID proc_id, char ***buffer, int *size);
   void environ_from_proc_id_ex(PROCID proc_id, const char *name, char **value);
   const char *environ_from_proc_id_ex(PROCID proc_id, const char *name);
-  PROCINFO ProcInfoFromProcId(PROCID proc_id);
+  PROCINFO proc_info_from_proc_id(PROCID proc_id);
   void free_proc_info(PROCINFO proc_info);
   PROCLIST proc_list_create();
   PROCID process_id(PROCLIST proc_list, int i);
@@ -119,7 +119,7 @@ namespace ngs::proc {
   #if defined(PROCESS_GUIWINDOW_IMPL)
   WINDOWID window_id_from_native_window(WINDOW window);
   WINDOW native_window_from_window_id(WINDOWID winid);
-  void WindowIdEnumerate(WINDOWID **win_id, int *size);
+  void window_id_enumerate(WINDOWID **win_id, int *size);
   void proc_id_from_window_id(WINDOWID win_id, PROCID *proc_id);
   void window_id_from_proc_id(PROCID proc_id, WINDOWID **win_id, int *size);
   void free_window_id(WINDOWID *win_id);
