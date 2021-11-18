@@ -852,9 +852,9 @@ namespace ngs::fs {
     long sz = file_bin_size(fd);
     char *buffer = new char[sz];
     #if defined(_WIN32)
-    long result =  _read(fd, buffer, str.length() + 1);
+    long result =  _read(fd, buffer, sz);
     #else
-    long result = read(fd, buffer, str.length() + 1);
+    long result = read(fd, buffer, sz);
     #endif
     if (result == -1) {
       delete[] buffer;
@@ -868,11 +868,15 @@ namespace ngs::fs {
   int file_text_open_from_string(string str) {
     int fd[2];
     #if defined(_WIN32)
-    if (_pipe(fd, str.length(), O_BINARY) < 0) return -1;
+    if (_pipe(fd, str.length() + 1, O_BINARY) == -1) return -1;
     #else
     if (pipe(fd) < 0) return -1;
     #endif
-    file_text_write_string(fd[1], str);
+    if (file_text_write_string(fd[1], str) == -1) {
+      file_bin_close(fd[1]);
+      file_bin_close(fd[2]);
+      return -1;
+    }
     file_bin_close(fd[1]);
     return fd[0];
   }
