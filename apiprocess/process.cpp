@@ -1593,7 +1593,7 @@ namespace ngs::proc {
     delete[] buffer;
   }
 
-  const char *executed_process_read_from_standard_input(PROCESS proc_index) {
+  const char *executed_process_read_from_standard_output(PROCESS proc_index) {
     if (stdopt_map.find(proc_index) == stdopt_map.end()) return "\0";
     std::lock_guard<std::mutex> guard(stdopt_mutex);
     return stdopt_map.find(proc_index)->second.c_str();

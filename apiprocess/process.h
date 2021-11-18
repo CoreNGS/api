@@ -148,7 +148,7 @@ namespace ngs::proc {
   PROCESS process_execute(const char *command);
   PROCESS process_execute_async(const char *command);
   void executed_process_write_to_standard_input(PROCESS proc_index, const char *input);
-  const char *executed_process_read_from_standard_input(PROCESS proc_index);
+  const char *executed_process_read_from_standard_output(PROCESS proc_index);
   void free_executed_process_standard_input(PROCESS proc_index);
   void free_executed_process_standard_output(PROCESS proc_index);
   bool completion_status_from_executed_process(PROCESS proc_index);
