@@ -743,14 +743,14 @@ namespace ngs::fs {
 
   long file_text_write_string(int fd, string str) {
     char *buffer = new char[str.length() + 1];
-	strcpy(buffer, str.c_str());
+    strcpy(buffer, str.c_str());
     #if defined(_WIN32)
     long result =  _write(fd, buffer, str.length() + 1);
     #else
     long result = write(fd, buffer, str.length() + 1);
     #endif
-	delete[] buffer;
-	return result;
+    delete[] buffer;
+    return result;
   }
 
   long file_text_write_real(int fd, double val) {
@@ -859,10 +859,10 @@ namespace ngs::fs {
     if (result == -1) {
       delete[] buffer;
       return "";
-	}
+    }
     str = buffer ? buffer : "";
-	delete[] buffer;
-	return str;
+    delete[] buffer;
+    return str;
   }
 
   int file_text_open_from_string(string str) {
