@@ -792,7 +792,7 @@ namespace ngs::proc {
       std::vector<char> str1; str1.resize(s, '\0');
       char *cwd = str1.data();
       if (sysctl(mib, 4, cwd, &s, nullptr, 0) == 0) {
-        static std::string str2; str2 = cwd ? : "\0";
+        static std::string str2; str2 = cwd ? cwd : "\0";
         *buffer = (char *)str2.c_str();
       }
     }
@@ -1094,7 +1094,7 @@ namespace ngs::proc {
     str = value;
     #else
     char *value = getenv(name);
-    str = value ? : "\0";
+    str = value ? value : "\0";
     #endif
     return str.c_str();
   }
@@ -1357,8 +1357,8 @@ namespace ngs::proc {
     return procInfoIndex;
   }
 
-  char *executable_image_file_path(PROCINFO proc_info) { return proc_info_map[proc_info]->executable_image_file_path ? : (char *)"\0"; }
-  char *current_working_directory(PROCINFO proc_info) { return proc_info_map[proc_info]->current_working_directory ? : (char *)"\0"; }
+  char *executable_image_file_path(PROCINFO proc_info) { return proc_info_map[proc_info]->executable_image_file_path ? proc_info_map[proc_info]->executable_image_file_path : (char *)"\0"; }
+  char *current_working_directory(PROCINFO proc_info) { return proc_info_map[proc_info]->current_working_directory ? proc_info_map[proc_info]->current_working_directory : (char *)"\0"; }
   PROCID parent_process_id(PROCINFO proc_info) { return proc_info_map[proc_info]->parent_process_id; }
   PROCID *child_process_id(PROCINFO proc_info) { return proc_info_map[proc_info]->child_process_id; }
   PROCID child_process_id(PROCINFO proc_info, int i) { return proc_info_map[proc_info]->child_process_id[i]; }
