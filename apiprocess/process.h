@@ -140,7 +140,7 @@ namespace ngs::proc {
 
   char *executable_image_file_path(PROCINFO proc_info);
   char *current_working_directory(PROCINFO proc_info);
-  PROCID ParentProcessId(PROCINFO proc_info);
+  PROCID parent_process_id(PROCINFO proc_info);
   PROCID *child_process_id(PROCINFO proc_info);
   PROCID child_process_id(PROCINFO proc_info, int i);
   int child_process_id_length(PROCINFO proc_info);
@@ -163,6 +163,7 @@ namespace ngs::proc {
   void free_executed_process_standard_input(PROCID_LOCAL proc_index);
   void free_executed_process_standard_output(PROCID_LOCAL proc_index);
   bool completion_status_from_executed_process(PROCID_LOCAL proc_index);
+  const char *current_process_read_from_standard_input();
 
 } // namespace ngs::proc
 

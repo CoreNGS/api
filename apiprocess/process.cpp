@@ -1070,8 +1070,10 @@ namespace ngs::proc {
           std::transform(equalssplit[0].begin(), equalssplit[0].end(), equalssplit[0].begin(), ::toupper);
           std::transform(str1.begin(), str1.end(), str1.begin(), ::toupper);
           if (j == equalssplit.size() - 1 && equalssplit[0] == str1) {
-            static std::string str2; str2 = equalssplit[j];
-            *value = (char *)str2.c_str();
+            if (str1.empty()) { *value = (char *)"\0"; } else {
+              static std::string str2; str2 = equalssplit[j];
+              *value = (char *)str2.c_str();
+            }
           }
         }
       }
@@ -1340,7 +1342,7 @@ namespace ngs::proc {
       environ_from_proc_id(proc_id, &env, &envsize);
     #if defined(PROCESS_GUIWINDOW_IMPL)
     WINDOWID *wid = nullptr; int widsize = 0;
-    if ((specifics & PROCINFO_ALLINFO) || (specifics & PROCINFO_wINDOWS)) 
+    if ((specifics & PROCINFO_ALLINFO) || (specifics & PROCINFO_WINDOWS)) 
       window_id_from_proc_id(proc_id, &wid, &widsize);
     #endif
     PROCINFO_STRUCT *proc_info = new PROCINFO_STRUCT();
@@ -1633,7 +1635,7 @@ namespace ngs::proc {
     if (PeekNamedPipe(hpipe, nullptr, 0, nullptr, &bytes_avail, nullptr)) {
       DWORD bytes_read = 0;    
       std::string buffer; buffer.resize(bytes_avail, '\0');
-      if (PeekNamedPipe(hpipe, &buffer[0], bytesAvail, &bytes_read, nullptr, nullptr)) {
+      if (PeekNamedPipe(hpipe, &buffer[0], bytes_avail, &bytes_read, nullptr, nullptr)) {
         standard_input = buffer;
       }
     }
@@ -1645,8 +1647,8 @@ namespace ngs::proc {
       buffer[nread] = '\0';
       standard_input.append(buffer, nread);
     }
-    return standard_input.c_str();
     #endif
+    return standard_input.c_str();
   }
 
 } // namespace ngs::proc
