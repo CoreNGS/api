@@ -45,7 +45,7 @@ namespace ngs::proc {
   #else
   typedef unsigned long PROCID;
   #endif
-  typedef PROCID PROCID_LOCAL;
+  typedef PROCID LOCALPROCID;
   #if defined(PROCESS_GUIWINDOW_IMPL)
   #if defined(_WIN32)
   typedef HWND WINDOW;
@@ -114,13 +114,14 @@ namespace ngs::proc {
   void cwd_from_proc_id(PROCID proc_id, char **buffer);
   void free_cmdline(char **buffer);
   void cmdline_from_proc_id(PROCID proc_id, char ***buffer, int *size);
-  const char *environment_Get_variable(const char *name);
+  const char *environment_get_variable(const char *name);
   bool environment_set_variable(const char *name, const char *value);
   bool environment_unset_variable(const char *name);
   void free_environ(char **buffer);
   void environ_from_proc_id(PROCID proc_id, char ***buffer, int *size);
   void environ_from_proc_id_ex(PROCID proc_id, const char *name, char **value);
   const char *environ_from_proc_id_ex(PROCID proc_id, const char *name);
+  const char *directory_get_temporary_path();
   PROCINFO proc_info_from_proc_id(PROCID proc_id, PROCINFO_SPECIFIC specifics);
   void free_proc_info(PROCINFO proc_info);
   PROCLIST proc_list_create();
@@ -156,14 +157,13 @@ namespace ngs::proc {
   int owned_window_id_length(PROCINFO proc_info);
   #endif
 
-  PROCID_LOCAL process_execute(const char *command);
-  PROCID_LOCAL process_execute_async(const char *command);
-  void executed_process_write_to_standard_input(PROCID_LOCAL proc_index, const char *input);
-  const char *executed_process_read_from_standard_output(PROCID_LOCAL proc_index);
-  void free_executed_process_standard_input(PROCID_LOCAL proc_index);
-  void free_executed_process_standard_output(PROCID_LOCAL proc_index);
-  bool completion_status_from_executed_process(PROCID_LOCAL proc_index);
+  LOCALPROCID process_execute(const char *command);
+  LOCALPROCID process_execute_async(const char *command);
+  void executed_process_write_to_standard_input(LOCALPROCID proc_index, const char *input);
+  const char *executed_process_read_from_standard_output(LOCALPROCID proc_index);
+  void free_executed_process_standard_input(LOCALPROCID proc_index);
+  void free_executed_process_standard_output(LOCALPROCID proc_index);
+  bool completion_status_from_executed_process(LOCALPROCID proc_index);
   const char *current_process_read_from_standard_input();
 
 } // namespace ngs::proc
-
