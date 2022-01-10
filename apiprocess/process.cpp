@@ -1245,9 +1245,8 @@ namespace ngs::proc {
         if (proc_id == pid) {
           CFNumberRef windowID = (CFNumberRef)CFDictionaryGetValue(
           windowInfoDictionary, kCGWindowNumber);
-          CGWindowID wid; CFNumberGetValue(windowID,
-          kCGWindowIDCFNumberType, &wid);
-          wid_vec_1.push_back(std::to_string(wid)); i++;
+          CGWindowID wid; CFNumberGetValue(windowID, kCGWindowIDCFNumberType, &wid);
+          wid_vec_1.push_back(std::to_string((unsigned int)wid)); i++;
         }
       }
     }
