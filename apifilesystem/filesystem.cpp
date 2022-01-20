@@ -95,9 +95,9 @@ namespace ngs::fs {
     struct fileargs fileargs = SLIST_HEAD_INITIALIZER(fileargs);
     int fsflg = 0, cflg = 0, fuser = 0;
 
-    bool match(struct filearg *fa, struct kinfo_file *kf) {
-      if (fa->dev == kf->va_fsid) {
-        if (fa->ino == kf->va_fileid) {
+    bool match(struct filearg *fa, struct kinfo_file *kif) {
+      if (fa->dev == kif->va_fsid) {
+        if (fa->ino == kif->va_fileid) {
           return true;
         }
       }
@@ -155,7 +155,7 @@ namespace ngs::fs {
       FTSENT *parent = nullptr;
       string result, path; glob_t glob_result;
       memset(&glob_result, 0, sizeof(glob_result)); string pattern = "/*";
-      int return_value = glob(pattern.c_str(), GLOB_TILDE, NULL, &glob_result);
+      int return_value = glob(pattern.c_str(), GLOB_TILDE, nullptr, &glob_result);
       if (return_value) {
         globfree(&glob_result);
       }
@@ -181,11 +181,12 @@ namespace ngs::fs {
                 SLIST_FOREACH(fa, &fileargs, next) {
                   if (match(fa, kif)) {
                     path = fa->name;
-                    break;
+                    goto finish;
                   }
                 }
               }
-            }
+            } 
+            finish:
             fts_close(file_system); 
           }
           delete[] arr;
