@@ -138,4 +138,3 @@ namespace ngs::fs {
   int file_text_close(int fd);
 
 } // namespace ngs::fs
- 
