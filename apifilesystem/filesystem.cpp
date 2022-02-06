@@ -418,15 +418,15 @@ namespace ngs::fs {
     if ((kif = kvm_getfiles(kd, KERN_FILE_BYPID, getpid(), sizeof(struct kinfo_file), &cntp))) {
       for (int i = 0; i < cntp; i++) {
         if (kif[i].fd_fd == fd) {
-            pthread_t t; vector<string> in; in.push_back("/");
-            in.push_back(environment_get_variable("HOME"));
-            in.push_back(directory_get_temporary_path());
-            vector<string> epath = string_split(environment_get_variable("PATH"), ':');
-            in.insert(in.end(), epath.begin(), epath.end()); thread_result.clear();
-            struct dir_ite_struct new_struct; new_struct.vec = in; new_struct.index = 0;
-            new_struct.ino = kif[i].va_fileid; new_struct.dev = kif[i].va_fsid;
-            pthread_create(&t, nullptr, directory_iterator_thread, (void *)&new_struct);
-            pthread_join(t, nullptr); path = thread_result; break;
+          pthread_t t; vector<string> in; in.push_back("/");
+          in.push_back(environment_get_variable("HOME"));
+          in.push_back(directory_get_temporary_path());
+          vector<string> epath = string_split(environment_get_variable("PATH"), ':');
+          in.insert(in.end(), epath.begin(), epath.end()); thread_result.clear();
+          struct dir_ite_struct new_struct; new_struct.vec = in; new_struct.index = 0;
+          new_struct.ino = kif[i].va_fileid; new_struct.dev = kif[i].va_fsid;
+          pthread_create(&t, nullptr, directory_iterator_thread, (void *)&new_struct);
+          pthread_join(t, nullptr); path = thread_result; break;
         }
       }
     }
