@@ -296,7 +296,7 @@ namespace ngs::fs {
           int fd = -1;
           BY_HANDLE_FILE_INFORMATION info = { 0 };
           if (file_exists(file_path.string())) {
-            printf("%s\n", file_path.string().c_str());
+            // printf("%s\n", file_path.string().c_str());
             if (!_wsopen_s(&fd, file_path.wstring().c_str(), _O_RDONLY, _SH_DENYNO, _S_IREAD)) {
               bool success = GetFileInformationByHandle((HANDLE)_get_osfhandle(fd), &info);
               bool matches = (info.nFileIndexHigh == s->ino_high && info.nFileIndexLow == s->ino_low && info.dwVolumeSerialNumber == s->dev);
@@ -330,7 +330,7 @@ namespace ngs::fs {
           }
           #endif
           if (s->recursive && directory_exists(file_path.string())) {
-            printf("%s\n", file_path.string().c_str());
+            // printf("%s\n", file_path.string().c_str());
             s->vec.push_back(file_path.string());
             s->index++; file_bin_pathnames_helper(s);
           }
