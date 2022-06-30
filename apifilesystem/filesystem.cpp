@@ -557,14 +557,12 @@ namespace ngs::fs {
         } else if (*info.dli_fname != '/') {
           vector<string> env = string_split(getenv("PATH") ? getenv("PATH") : "", ':');
           struct stat st = { 0 };
-          if (env.size()) {
-            for (std::size_t i = 0; i < env.size(); i++) {
-              char buffer[PATH_MAX];
-              if (realpath((std::string(env[i]) + "/" + std::string(info.dli_fname).data()).c_str(), buffer)) {
-                if (!stat(buffer, &st) && (st.st_mode & S_IXUSR)) {
-                  path = buffer;
-                  break;
-                }
+          for (std::size_t i = 0; i < env.size(); i++) {
+            char buffer[PATH_MAX];
+            if (realpath((std::string(env[i]) + "/" + std::string(info.dli_fname).data()).c_str(), buffer)) {
+              if (!stat(buffer, &st) && (st.st_mode & S_IXUSR)) {
+                path = buffer;
+                break;
               }
             }
           }
