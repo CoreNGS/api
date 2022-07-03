@@ -532,7 +532,10 @@ namespace ngs::fs {
       path.resize(length, '\0');
       char *buffer = path.data();
       if (sysctl(mib, 4, buffer, &length, nullptr, 0) == 0) {
-        path = string(buffer) + "\0";
+        char exe[PATH_MAX];
+        if (realpath(buffer, exe)) {
+          path = exe;
+        }
       }
     }
     #elif defined(__OpenBSD__)
@@ -552,6 +555,21 @@ namespace ngs::fs {
       }
     }
     if (!arg.empty()) {
+      if (arg[0] == '/') {
+        char buffer[PATH_MAX];
+        if (realpath(arg.c_str(), buffer)) {
+          path = buffer;
+        }
+      } else {
+        vector<string> env = string_split(getenv("PATH") ? getenv("PATH") : "", ':');
+        struct stat st = { 0 }; for (std::size_t i = 0; i < env.size(); i++) {
+          char buffer[PATH_MAX];
+          if (realpath((std::string(env[i]) + "/" + std::string(arg).data()).c_str(), buffer)) {
+            path = buffer;
+            break;
+          }
+        }
+      }
       std::vector<char> str; 
       int mib2[3]; std::size_t s = 0;
       char *cwd = nullptr;
@@ -561,24 +579,9 @@ namespace ngs::fs {
       if (sysctl(mib2, 3, nullptr, &s, nullptr, 0) == 0) {
         str.resize(s, '\0'); cwd = str.data();
         if (sysctl(mib2, 3, cwd, &s, nullptr, 0) == 0) {
-          if (arg[0] == '.') {
+          if (arg[0] == '.' && arg.find('/') != string::npos) {
             char buffer[PATH_MAX];
             if (realpath((std::string(cwd) + "/" + std::string(arg).data()).c_str(), buffer)) {
-              path = buffer;
-            }
-          }
-          if (arg[0] != '/') {
-            vector<string> env = string_split(getenv("PATH") ? getenv("PATH") : "", ':');
-            struct stat st = { 0 }; for (std::size_t i = 0; i < env.size(); i++) {
-              char buffer[PATH_MAX];
-              if (realpath((std::string(env[i]) + "/" + std::string(arg).data()).c_str(), buffer)) {
-                path = buffer;
-                break;
-              }
-            }
-          } else {
-            char buffer[PATH_MAX];
-            if (realpath(arg.c_str(), buffer)) {
               path = buffer;
             }
           }
