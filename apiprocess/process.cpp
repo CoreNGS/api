@@ -1853,8 +1853,8 @@ namespace ngs::proc {
     si.hStdInput = stdin_read;
     PROCESS_INFORMATION pi = { 0 }; LOCALPROCID proc_index = 0;
     BOOL success = CreateProcessW(nullptr, cwstr_command, nullptr, nullptr, true, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
-	delete[] cwstr_command;
-	if (success) {
+    delete[] cwstr_command;
+    if (success) {
       CloseHandle(stdout_write);
       CloseHandle(stdin_read);
       PROCID proc_id = pi.dwProcessId; child_proc_id[index] = proc_id; proc_index = (LOCALPROCID)proc_id;
