@@ -107,11 +107,6 @@
 #define KINFO_PROC kinfo_proc2
 #endif
 
-using ngs::proc::PROCID;
-#if defined(PROCESS_GUIWINDOW_IMPL)
-using ngs::proc::WINDOWID;
-#endif
-
 namespace {
 
   #if !defined(_MSC_VER)
@@ -1446,15 +1441,15 @@ namespace ngs::proc {
     if (!proc_id_exists(proc_id)) return;
     #if defined(_WIN32)
     HWND hWnd = GetTopWindow(GetDesktopWindow());
-    PROCID pid = 0; proc_id_from_window_id(window_id_from_native_window(hWnd), &pid);
+    PROCID pid = 0; proc_id_from_window_id(window_id_from_native_window((WINDOW)hWnd), &pid);
     if (proc_id == pid) {
-      wid_vec_1.push_back(window_id_from_native_window(hWnd)); i++;
+      wid_vec_1.push_back(window_id_from_native_window((WINDOW)hWnd)); i++;
     }
     while (hWnd = GetWindow(hWnd, GW_HWNDNEXT)) {
       message_pump();
-      PROCID pid = 0; proc_id_from_window_id(window_id_from_native_window(hWnd), &pid);
+      PROCID pid = 0; proc_id_from_window_id(window_id_from_native_window((WINDOW)hWnd), &pid);
       if (proc_id == pid) {
-        wid_vec_1.push_back(window_id_from_native_window(hWnd)); i++;
+        wid_vec_1.push_back(window_id_from_native_window((WINDOW)hWnd)); i++;
       }
     }
     #elif (defined(__APPLE__) && defined(__MACH__)) && !defined(PROCESS_XQUARTZ_IMPL)
@@ -1492,9 +1487,9 @@ namespace ngs::proc {
       if (actual_format == 32) {
         unsigned long *array = (unsigned long *)prop;
         for (int j = nitems - 1; j >= 0; j--) {
-          PROCID pid; proc_id_from_window_id(window_id_from_native_window(array[j]), &pid);
+          PROCID pid; proc_id_from_window_id(window_id_from_native_window((WINDOW)array[j]), &pid);
           if (proc_id == pid) {
-            wid_vec_1.push_back(window_id_from_native_window(array[j])); i++;
+            wid_vec_1.push_back(window_id_from_native_window((WINDOW)array[j])); i++;
           }
         }
       }
@@ -1550,7 +1545,7 @@ namespace ngs::proc {
   void proc_id_from_window_id(WINDOWID win_id, PROCID *proc_id) {
     *proc_id = 0;
     #if defined(_WIN32)
-    DWORD pid = 0; GetWindowThreadProcessId(native_window_from_window_id(win_id), &pid);
+    DWORD pid = 0; GetWindowThreadProcessId((HWND)native_window_from_window_id(win_id), &pid);
     *proc_id = (PROCID)pid;
     #elif (defined(__APPLE__) && defined(__MACH__)) && !defined(PROCESS_XQUARTZ_IMPL)
     CFArrayRef window_array = CGWindowListCopyWindowInfo(
@@ -1586,7 +1581,7 @@ namespace ngs::proc {
     int actual_format = 0, status = 0;
     unsigned long nitems = 0, bytes_after = 0;
     filter_atom = XInternAtom(display, "_NET_WM_PID", true);
-    status = XGetWindowProperty(display, native_window_from_window_id(win_id), filter_atom, 0, 1000, false,
+    status = XGetWindowProperty(display, (Window)native_window_from_window_id(win_id), filter_atom, 0, 1000, false,
     AnyPropertyType, &actual_type, &actual_format, &nitems, &bytes_after, &prop);
     if (status == Success && prop != nullptr) {
       property = prop[0] + (prop[1] << 8) + (prop[2] << 16) + (prop[3] << 24);
