@@ -524,7 +524,7 @@ namespace ngs::fs {
     mib[0] = CTL_KERN;
     #if defined(__NetBSD__)
     mib[1] = KERN_PROC_ARGS;
-    mib[2] = getpid();
+    mib[2] = -1;
     mib[3] = KERN_PROC_PATHNAME;
     #else
     mib[1] = KERN_PROC;
@@ -614,13 +614,13 @@ namespace ngs::fs {
       }
     }
     finish3:
+    if (path.empty()) return path;
     kd = kvm_openfiles(nullptr, nullptr, nullptr, KVM_NO_FILES, errbuf); 
     if (!kd) { path.clear(); goto finish4; }
     if ((kif = kvm_getfiles(kd, KERN_FILE_BYPID, getpid(), sizeof(struct kinfo_file), &cntp))) {
-      for (int i = 0; i < cntp; i++) {
-        if (kif[i].fd_fd == KERN_FILE_TEXT) {
-          struct stat st = { 0 }; 
-          if (!stat(path.c_str(), &st)) {
+      if (!stat(path.c_str(), &st)) {
+        for (int i = 0; i < cntp; i++) {
+          if (kif[i].fd_fd == KERN_FILE_TEXT) {
             if (st.st_dev == kif[i].va_fsid || st.st_ino == kif[i].va_fileid) {
               ok = true;
               break;
