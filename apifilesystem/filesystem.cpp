@@ -626,6 +626,11 @@ namespace ngs::fs {
       }
     }
     path = ((buffer) ? buffer : "");
+    #elif defined(__sun)
+    char buffer[PATH_MAX];
+    if (realpath("/proc/self/path/a.out", buffer)) {
+      path = buffer;
+    }
     #endif
     return path;
   }
