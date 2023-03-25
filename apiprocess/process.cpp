@@ -1436,6 +1436,10 @@ namespace ngs::ps {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
         int status; wait_proc_id = waitpid(fork_proc_id, &status, WNOHANG);
         std::string exe = exe_from_proc_id(fork_proc_id);
+        if (exe.empty()) {
+          proc_id = 0;
+          break;
+        }
         const char *env   = getenv("SHELL");
         std::string shell = ((env) ? env : "/bin/sh");
         char envbuf[PATH_MAX]; 
