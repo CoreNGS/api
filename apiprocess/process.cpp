@@ -400,7 +400,7 @@ namespace ngs::ps {
     proc_info.resize(proc_listpids(PROC_ALL_PIDS, 0, nullptr, 0) / sizeof(NGS_PROCID));
     int cntp = proc_listpids(PROC_ALL_PIDS, 0, &proc_info[0], sizeof(NGS_PROCID) * proc_info.size());
     for (int i = cntp - 1; i >= 0; i--) {
-      if (proc_info[i] == 0) continue;
+      if (proc_info[i] <= 0) continue;
       vec.push_back(proc_info[i]);
     }
     #elif (defined(__linux__) || defined(__ANDROID__))
@@ -679,7 +679,7 @@ namespace ngs::ps {
     proc_info.resize(proc_listpids(PROC_PPID_ONLY, (uint32_t)parent_proc_id, nullptr, 0) / sizeof(NGS_PROCID));
     int cntp = proc_listpids(PROC_PPID_ONLY, (uint32_t)parent_proc_id, &proc_info[0], sizeof(NGS_PROCID) * proc_info.size());
     for (int i = cntp - 1; i >= 0; i--) {
-      if (proc_info[i] == 0) continue;
+      if (proc_info[i] <= 0) continue;
       if (proc_info[i] == 1 && parent_proc_id == 0) {
         vec.push_back(0);
       }
