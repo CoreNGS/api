@@ -71,7 +71,7 @@
 #endif
 #endif
 
-#include "sysinfo.hpp"
+#include "system.hpp"
 
 namespace ngs::sys {
 
