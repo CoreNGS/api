@@ -68,8 +68,8 @@
 #include <sys/sysctl.h>
 #endif
 #endif
-#include <sys/utsname.h>
 #endif
+#include <sys/utsname.h>
 #endif
 #if (defined(_WIN32) && defined(_MSC_VER))
 #pragma comment(lib, "ws2_32.lib")
@@ -290,6 +290,7 @@ long long memory_totalram() {
   if (!sysinfo(&info)) {
     return info.totalram;
   }
+  return -1;
   #elif (defined(__FreeBSD__) || defined(__DragonFly__))
   struct sysinfo info;
   if (!sysinfo(&info)) {
