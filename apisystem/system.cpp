@@ -35,6 +35,7 @@
 #include <fstream>
 #include <sstream>
 #include <regex>
+#include <cstdlib>
 #include <cstring>
 #include <cstdio>
 #include <cmath>
@@ -65,6 +66,9 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <kvm.h>
+#elif (defined(__NetBSD__) || defined(__OpenBSD__))
+#include <sys/swap.h>
+#include <unistd.h>
 #endif
 #include <sys/sysctl.h>
 #endif
@@ -496,15 +500,32 @@ long long memory_totalvmem() {
   return -1;  
   #elif (defined(__FreeBSD__) || defined(__DragonFly__))
   kvm_t *kvmh = nullptr;
-  int page_s = getpagesize();
+  long page_s = sysconf(_SC_PAGESIZE);
   kvmh = kvm_open(nullptr, "/dev/null", "/dev/null", O_RDONLY, nullptr);
   if (!kvmh) return -1;
   struct kvm_swap k_swap;
   if (kvm_getswapinfo(kvmh, &k_swap, 1, 0) != -1) {
     kvm_close(kvmh);
-    return k_swap.ksw_total * getpagesize();
+    return k_swap.ksw_total * page_s;
   }
   kvm_close(kvmh);
+  return -1;
+  #elif (defined(__NetBSD__) || defined(__OpenBSD___))
+  long long total = 0;
+  long page_s = sysconf(_SC_PAGESIZE);
+  int nswap = swapctl(SWAP_STATS, nullptr, 0);
+  if (nswap > 0) {
+    struct swapent *swaps = (struct swapent *)calloc(nswap, sizeof(struct swapent));
+    if (swaps) {
+      if (swapctl(SWAP_STATS, swaps, nswap) > 0) {
+        for (int i = 0; i < nswap; i++) {
+          total += swaps[i].se_nblks * page_s;
+        }
+      }
+      free(swaps);
+    }
+    return total;
+  }
   return -1;
   #else
   return -1;
@@ -534,15 +555,32 @@ long long memory_availvmem() {
   return -1;
   #elif (defined(__FreeBSD__) || defined(__DragonFly__))
   kvm_t *kvmh = nullptr;
-  int page_s = getpagesize();
+  long page_s = sysconf(_SC_PAGESIZE);
   kvmh = kvm_open(nullptr, "/dev/null", "/dev/null", O_RDONLY, nullptr);
   if (!kvmh) return -1;
   struct kvm_swap k_swap;
   if (kvm_getswapinfo(kvmh, &k_swap, 1, 0) != -1) {
     kvm_close(kvmh);
-    return (k_swap.ksw_total - k_swap.ksw_used) * getpagesize();
+    return (k_swap.ksw_total - k_swap.ksw_used) * page_s;
   }
   kvm_close(kvmh);
+  return -1;
+  #elif (defined(__NetBSD__) || defined(__OpenBSD___))
+  long long total = 0;
+  long page_s = sysconf(_SC_PAGESIZE);
+  int nswap = swapctl(SWAP_STATS, nullptr, 0);
+  if (nswap > 0) {
+    struct swapent *swaps = (struct swapent *)calloc(nswap, sizeof(struct swapent));
+    if (swaps) {
+      if (swapctl(SWAP_STATS, swaps, nswap) > 0) {
+        for (int i = 0; i < nswap; i++) {
+          total += (swaps[i].se_nblks - saps[i].se_inuse) * page_s;
+        }
+      }
+      free(swaps);
+    }
+    return total;
+  }
   return -1;
   #else
   return -1;
@@ -572,15 +610,32 @@ long long memory_usedvmem() {
   return -1;
   #elif (defined(__FreeBSD__) || defined(__DragonFly__))
   kvm_t *kvmh = nullptr;
-  int page_s = getpagesize();
+  long page_s = sysconf(_SC_PAGESIZE);
   kvmh = kvm_open(nullptr, "/dev/null", "/dev/null", O_RDONLY, nullptr);
   if (!kvmh) return -1;
   struct kvm_swap k_swap;
   if (kvm_getswapinfo(kvmh, &k_swap, 1, 0) != -1) {
     kvm_close(kvmh);
-    return k_swap.ksw_used * getpagesize();
+    return k_swap.ksw_used * page_s;
   }
   kvm_close(kvmh);
+  return -1;
+  #elif (defined(__NetBSD__) || defined(__OpenBSD___))
+  long long total = 0;
+  long page_s = sysconf(_SC_PAGESIZE);
+  int nswap = swapctl(SWAP_STATS, nullptr, 0);
+  if (nswap > 0) {
+    struct swapent *swaps = (struct swapent *)calloc(nswap, sizeof(struct swapent));
+    if (swaps) {
+      if (swapctl(SWAP_STATS, swaps, nswap) > 0) {
+        for (int i = 0; i < nswap; i++) {
+          total += saps[i].se_inuse * page_s;
+        }
+      }
+      free(swaps);
+    }
+    return total;
+  }
   return -1;
   #else
   return -1;
