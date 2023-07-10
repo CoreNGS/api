@@ -51,7 +51,7 @@
 #if defined(__linux__)
 #include <sys/sysinfo.h>
 #endif
-#if ((defined(__APPLE__) && defined(__MACH__)) || defined(__FreeBSD__) || defined(__DragonFly__) || defined(__NetBSD__) || defined(__OpenBSD__))
+#if ((defined(__APPLE__) && defined(__MACH__)) || defined(__FreeBSD__) || defined(__DragonFly__) || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__sun))
 #include <sys/types.h>
 #if (defined(__FreeBSD__) || defined(__DragonFly__))
 #include <unistd.h>
