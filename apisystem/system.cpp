@@ -84,9 +84,6 @@ namespace ngs::sys {
 
 #if defined(CREATE_CONTEXT)
 static SDL_Window *window = nullptr;
-#endif
-
-#if defined(CREATE_CONTEXT)
 static bool create_context() {
   if (!window) {
     #if (defined(__linux__) || defined(__FreeBSD__) || defined(__DragonFly__) || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__sun))
@@ -104,7 +101,8 @@ static bool create_context() {
     #endif
     window = SDL_CreateWindow("", 0, 0, 1, 1, SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN);
     if (!window) return false;
-    SDL_GLContext context = SDL_GL_CreateContext(window);
+    SDL_GLContext context = SDL_GL_GetCurrentContext();
+    if (!context) context = SDL_GL_CreateContext(window);
     if (!context) return false;
     int err = SDL_GL_MakeCurrent(window, context);
     if (err) return false;
