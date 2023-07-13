@@ -853,6 +853,14 @@ std::string gpu_vendor() {
   const char *result = (char *)glGetString(GL_VENDOR);
   std::string str;
   str = result ? result : "";
+  #if (defined(__APPLE__) && defined(__MACH__))
+  std::size_t openp = str.find_first_of("(");
+  std::size_t closep = str.find_last_of(")");
+  if (openp != std::string::npos && closep != std::string::npos) {
+    str = str.substr(0, closep);
+    str = str.substr(openp + 1);
+  }
+  #endif
   return str;
 }
 
@@ -863,6 +871,26 @@ std::string gpu_renderer() {
   const char *result = (char *)glGetString(GL_RENDERER);
   std::string str;
   str = result ? result : "";
+  #if (defined(__APPLE__) && defined(__MACH__))
+  std::size_t openp = str.find_first_of("(");
+  std::size_t closep = str.find_last_of(")");
+  if (openp != std::string::npos && closep != std::string::npos) {
+    str = str.substr(0, closep);
+    str = str.substr(openp + 1);
+    std::vector<std::string> vec;
+    std::stringstream sstr(str);
+    std::string tmp;
+    while (std::getline(sstr, tmp, ',')) {
+      vec.push_back(tmp);
+    }
+    if (vec.size() >= 2) {
+      str = vec[1];
+      if (str.length() >= 1 && str[0] == ' ') {
+        str = str.substr(1);
+      }
+    }
+  }
+  #endif
   return str;
 }
 
