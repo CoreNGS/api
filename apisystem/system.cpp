@@ -846,7 +846,9 @@ long long memory_usedvmem() {
   #endif
 }
 
+static std::string gpuvendor;
 std::string gpu_vendor() {
+  if (!gpuvendor.empty()) return gpuvendor;
   #if defined(CREATE_CONTEXT)
   if (!create_context()) return "";
   #endif
@@ -861,10 +863,13 @@ std::string gpu_vendor() {
     str = str.substr(openp + 1);
   }
   #endif
+  gpuvendor = str;
   return str;
 }
 
+static std::string gpurenderer;
 std::string gpu_renderer() {
+  if (!gpurenderer.empty()) return gpurenderer;
   #if defined(CREATE_CONTEXT)
   if (!create_context()) return "";
   #endif
@@ -891,6 +896,7 @@ std::string gpu_renderer() {
     }
   }
   #endif
+  gpurenderer = str;
   return str;
 }
 
