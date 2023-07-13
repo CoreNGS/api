@@ -39,10 +39,8 @@
 #include <cstring>
 #include <cstdio>
 #include <cmath>
-#if defined(CREATE_CONTEXT)
 #include <SDL.h>
 #include <SDL_opengl.h>
-#endif
 #if defined(_WIN32)
 #include <winsock2.h>
 #include <windows.h>
