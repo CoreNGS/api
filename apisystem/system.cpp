@@ -30,17 +30,22 @@
 #endif
 #endif
 #include <algorithm>
-#include <string>
-#include <thread>
 #include <fstream>
 #include <sstream>
+#include <vector>
+#include <string>
+#include <thread>
 #include <regex>
 #include <cstdlib>
 #include <cstring>
 #include <cstdio>
 #include <cmath>
 #include <SDL.h>
+#if (defined(__APPLE__) && defined(__MACH__))
+#include <SDL_opengles2.h>
+#else
 #include <SDL_opengl.h>
+#endif
 #if defined(_WIN32)
 #include <winsock2.h>
 #include <windows.h>
@@ -86,6 +91,8 @@
 
 namespace ngs::sys {
 
+/* Define CREATE_CONTEXT in your build scripts or Makefiles if
+the calling process hasn't already done this on its own ... */
 #if defined(CREATE_CONTEXT)
 static SDL_Window *window = nullptr;
 static bool create_context() {
@@ -96,12 +103,11 @@ static bool create_context() {
     #endif
     if (SDL_Init(SDL_INIT_VIDEO)) return false;
     #if (defined(__APPLE__) && defined(__MACH__))
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+    // TODO: Find a way to get this working when statically linking SDL2 and ANGLE; it only works with dynamic ANGLE ...
+    // glGetString(...) will return nullptr whenever the ES context creation failed; a context is required for ANGLE ...
+    SDL_SetHint(SDL_HINT_OPENGL_ES_DRIVER, "1");
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
-    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-    SDL_GL_SetAttribute(SDL_GL_ACCELERATED_VISUAL, 1);
-    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-    SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
     #endif
     window = SDL_CreateWindow("", 0, 0, 1, 1, SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN);
     if (!window) return false;
@@ -851,10 +857,17 @@ std::string gpu_vendor() {
   #if defined(CREATE_CONTEXT)
   if (!create_context()) return "";
   #endif
+  #if (defined(__APPLE__) && defined(__MACH__))
+  PFNGLGETSTRINGPROC glGetStringFunc = (PFNGLGETSTRINGPROC)SDL_GL_GetProcAddress("glGetString");
+  const char *result = (char *)glGetStringFunc(GL_VENDOR);
+  #else
+  // Also tried just this on macOS, still returns nullptr with static ANGLE:
   const char *result = (char *)glGetString(GL_VENDOR);
+  #endif
   std::string str;
   str = result ? result : "";
   #if (defined(__APPLE__) && defined(__MACH__))
+  // Trim out of string useless info showing I used Google's ANGLE libraries ...
   std::size_t openp = str.find_first_of("(");
   std::size_t closep = str.find_last_of(")");
   if (openp != std::string::npos && closep != std::string::npos) {
@@ -872,10 +885,17 @@ std::string gpu_renderer() {
   #if defined(CREATE_CONTEXT)
   if (!create_context()) return "";
   #endif
+  #if (defined(__APPLE__) && defined(__MACH__))
+  PFNGLGETSTRINGPROC glGetStringFunc = (PFNGLGETSTRINGPROC)SDL_GL_GetProcAddress("glGetString");
+  const char *result = (char *)glGetStringFunc(GL_RENDERER);
+  #else
+  // Also tried just this on macOS, still returns nullptr with static ANGLE:
   const char *result = (char *)glGetString(GL_RENDERER);
+  #endif
   std::string str;
   str = result ? result : "";
   #if (defined(__APPLE__) && defined(__MACH__))
+  // Trim out of string useless info showing I used Google's ANGLE libraries ...
   std::size_t openp = str.find_first_of("(");
   std::size_t closep = str.find_last_of(")");
   if (openp != std::string::npos && closep != std::string::npos) {
@@ -1159,20 +1179,26 @@ int cpu_numcores() {
   }
   return numcores;
   #elif (defined(__APPLE__) && defined(__MACH__))
-  int physical_cpus = -1;
+  int logical_cpus = -1;
   std::size_t len = sizeof(int);
-  if (!sysctlbyname("hw.physicalcpu", &physical_cpus, &len, nullptr, 0)) {
-    numcores = physical_cpus;
+  if (!sysctlbyname("hw.logicalcpu", &logical_cpus, &len, nullptr, 0)) {
+    numcores = logical_cpus;
   }
   return numcores;
   #elif (defined(__FreeBSD__) || defined(__DragonFly__) || defined(__NetBSD__) || defined(__OpenBSD__))
-  int mib[2];
-  int physical_cpus = -1;
-  mib[0] = CTL_HW;
-  mib[1] = HW_NCPU;
-  std::size_t len = sizeof(int);
-  if (!sysctl(mib, 2, &physical_cpus, &len, nullptr, 0)) {
-    numcores = physical_cpus;
+  // TODO: See if this code works on DragonFly, NetBSD, and OpenBSD; if not, correct code as needed.
+  char buf[1024];
+  const char *result = nullptr;
+  FILE *fp = popen("sysctl -a | grep -i -o '[^ ]* core(s)' | awk 'FNR==1{print $1}'", "r");
+  if (fp) {
+    if (fgets(buf, sizeof(buf), fp)) {
+      buf[strlen(buf) - 1] = '\0';
+      result = buf;
+    }
+    pclose(fp);
+    static std::string str;
+    str = (result && strlen(result)) ? result : "-1";
+    numcores = (int)strtol(str.c_str(), nullptr, 10);
   }
   return numcores;
   #elif defined(__linux__)
