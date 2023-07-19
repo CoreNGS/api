@@ -40,10 +40,11 @@
 #include <cstring>
 #include <cstdio>
 #include <cmath>
+#if defined(_WIN32)
+#include <unordered_map>
+#endif
+#if (!defined(_WIN32) && (!defined(__APPLE__) && !defined(__MACH__)))
 #include <SDL.h>
-#if (defined(__APPLE__) && defined(__MACH__))
-#include <SDL_opengles2.h>
-#else
 #include <SDL_opengl.h>
 #endif
 #if defined(_WIN32)
@@ -93,6 +94,7 @@ namespace ngs::sys {
 
 /* Define CREATE_CONTEXT in your build scripts or Makefiles if
 the calling process hasn't already done this on its own ... */
+#if (!defined(_WIN32) && (!defined(__APPLE__) && !defined(__MACH__)))
 #if defined(CREATE_CONTEXT)
 static SDL_Window *window = nullptr;
 static bool create_context() {
@@ -102,13 +104,6 @@ static bool create_context() {
     SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0");
     #endif
     if (SDL_Init(SDL_INIT_VIDEO)) return false;
-    #if (defined(__APPLE__) && defined(__MACH__))
-    // TODO: Find a way to get this working when statically linking SDL2 and ANGLE; it only works with dynamic ANGLE ...
-    // glGetString(...) will return nullptr whenever the ES context creation failed; a context is required for ANGLE ...
-    SDL_SetHint(SDL_HINT_OPENGL_ES_DRIVER, "1");
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
-    #endif
     window = SDL_CreateWindow("", 0, 0, 1, 1, SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN);
     if (!window) return false;
     SDL_GLContext context = SDL_GL_CreateContext(window);
@@ -118,6 +113,7 @@ static bool create_context() {
   }
   return true;
 }
+#endif
 #endif
 
 struct HumanReadable {
@@ -854,27 +850,66 @@ long long memory_usedvmem() {
 static std::string gpuvendor;
 std::string gpu_vendor() {
   if (!gpuvendor.empty()) return gpuvendor;
+  const char *result = nullptr;
+  #if defined(_WIN32)
+  std::unordered_map<unsigned int, const char *> VendorNameById;
+  VendorNameById[0x1002] = "AMD";
+  VendorNameById[0x13B5] = "ARM";
+  VendorNameById[0x14E4] = "Broadcom";
+  VendorNameById[0x1AE0] = "Google Inc.";
+  VendorNameById[0x1010] = "ImgTec";
+  VendorNameById[0x8086] = "Intel";
+  VendorNameById[0x10DE] = "NVIDIA Corporation";
+  VendorNameById[0x5143] = "Qualcomm";
+  VendorNameById[0x144D] = "Samsung";
+  VendorNameById[0x15ad] = "VMWare";
+  VendorNameById[0x106B] = "Apple";
+  VendorNameById[0x1414] = "Microsoft Corporation";
+  VendorNameById[0x1AF4] = "VirtIO";
+  VendorNameById[0x10001] = "Vivante";
+  VendorNameById[0x10002] = "VeriSilicon";
+  VendorNameById[0x10003] = "Kazan";
+  VendorNameById[0x10004] = "CodePlay";
+  VendorNameById[0x10005] = "Mesa";
+  VendorNameById[0x10006] = "PoCL";
+  IDXGIFactory *pFactory = nullptr;
+  if (CreateDXGIFactory(__uuidof(IDXGIFactory), (void **)&pFactory) == S_OK) {
+    IDXGIAdapter *pAdapter = nullptr;
+    if (pFactory->EnumAdapters(0, &pAdapter) == S_OK) {
+      DXGI_ADAPTER_DESC adapterDesc;
+      if (pAdapter->GetDesc(&adapterDesc) == S_OK) {
+        if (VendorNameById.find(adapterDesc.VendorId) != VendorNameById.end()) {
+          result = VendorNameById[adapterDesc.VendorId];
+        }
+      }
+      pAdapter->Release();
+    }
+    pFactory->Release();
+  }
+  #elif (!defined(__APPLE__) && !defined(__MACH__))
   #if defined(CREATE_CONTEXT)
   if (!create_context()) return "";
   #endif
-  #if (defined(__APPLE__) && defined(__MACH__))
-  PFNGLGETSTRINGPROC glGetStringFunc = (PFNGLGETSTRINGPROC)SDL_GL_GetProcAddress("glGetString");
-  const char *result = (char *)glGetStringFunc(GL_VENDOR);
+  result = (char *)glGetString(GL_VENDOR);
   #else
-  // Also tried just this on macOS, still returns nullptr with static ANGLE:
-  const char *result = (char *)glGetString(GL_VENDOR);
+  char buf[1024];
+  FILE *fp = popen("system_profiler SPDisplaysDataType | grep -i 'Vendor: ' | uniq | awk -F 'Vendor: ' '{$1=$1};1' | awk '{$1=$1};1'", "r");
+  if (fp) {
+    if (fgets(buf, sizeof(buf), fp)) {
+      buf[strlen(buf) - 1] = '\0';
+      if (strcmp(buf, "Intel") == 0) {
+        // Mimick return value of glGetString(GL_VENDOR) on macOS
+        // by appending "Inc." to the string if it equals "Intel"
+        static std::string res;
+        res = buf + std::string(" Inc.");
+        result = res.c_str();
+      }
+    }
+    pclose(fp);
+  }
   #endif
   std::string str;
   str = result ? result : "";
-  #if (defined(__APPLE__) && defined(__MACH__))
-  // Trim out of string useless info showing I used Google's ANGLE libraries ...
-  std::size_t openp = str.find_first_of("(");
-  std::size_t closep = str.find_last_of(")");
-  if (openp != std::string::npos && closep != std::string::npos) {
-    str = str.substr(0, closep);
-    str = str.substr(openp + 1);
-  }
-  #endif
   gpuvendor = str;
   return str;
 }
@@ -882,39 +917,45 @@ std::string gpu_vendor() {
 static std::string gpurenderer;
 std::string gpu_renderer() {
   if (!gpurenderer.empty()) return gpurenderer;
+  const char *result = nullptr;
+  #if defined(_WIN32)
+  auto narrow = [](std::wstring wstr) {
+    if (wstr.empty()) return std::string("");
+    int nbytes = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), (int)wstr.length(), nullptr, 0, nullptr, nullptr);
+    std::vector<char> buf(nbytes);
+    return std::string { buf.data(), (std::size_t)WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), (int)wstr.length(), buf.data(), nbytes, nullptr, nullptr) };
+  };
+  IDXGIFactory *pFactory = nullptr;
+  if (CreateDXGIFactory(__uuidof(IDXGIFactory), (void **)&pFactory) == S_OK) {
+    IDXGIAdapter *pAdapter = nullptr;
+    if (pFactory->EnumAdapters(0, &pAdapter) == S_OK) {
+      DXGI_ADAPTER_DESC adapterDesc;
+      if (pAdapter->GetDesc(&adapterDesc) == S_OK) {
+        result = narrow(adapterDesc.Description);
+      }
+    }
+    pAdapter->Release();
+    }
+    pFactory->Release();
+  }
+  #elif (!defined(__APPLE__) && !defined(__MACH__))
   #if defined(CREATE_CONTEXT)
   if (!create_context()) return "";
   #endif
-  #if (defined(__APPLE__) && defined(__MACH__))
-  PFNGLGETSTRINGPROC glGetStringFunc = (PFNGLGETSTRINGPROC)SDL_GL_GetProcAddress("glGetString");
-  const char *result = (char *)glGetStringFunc(GL_RENDERER);
+  result = (char *)glGetString(GL_RENDERER);
   #else
-  // Also tried just this on macOS, still returns nullptr with static ANGLE:
-  const char *result = (char *)glGetString(GL_RENDERER);
+  char buf[1024];
+  FILE *fp = popen("system_profiler SPDisplaysDataType | grep -i 'Chipset Model: ' | uniq | awk -F 'Chipset Model: ' '{$1=$1};1' | awk '{$1=$1};1'", "r");
+  if (fp) {
+    if (fgets(buf, sizeof(buf), fp)) {
+      buf[strlen(buf) - 1] = '\0';
+      result = buf;
+    }
+    pclose(fp);
+  }
   #endif
   std::string str;
   str = result ? result : "";
-  #if (defined(__APPLE__) && defined(__MACH__))
-  // Trim out of string useless info showing I used Google's ANGLE libraries ...
-  std::size_t openp = str.find_first_of("(");
-  std::size_t closep = str.find_last_of(")");
-  if (openp != std::string::npos && closep != std::string::npos) {
-    str = str.substr(0, closep);
-    str = str.substr(openp + 1);
-    std::vector<std::string> vec;
-    std::stringstream sstr(str);
-    std::string tmp;
-    while (std::getline(sstr, tmp, ',')) {
-      vec.push_back(tmp);
-    }
-    if (vec.size() >= 2) {
-      str = vec[1];
-      if (str.length() >= 1 && str[0] == ' ') {
-        str = str.substr(1);
-      }
-    }
-  }
-  #endif
   gpurenderer = str;
   return str;
 }
