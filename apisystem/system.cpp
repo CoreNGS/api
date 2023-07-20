@@ -43,9 +43,13 @@
 #if defined(_WIN32)
 #include <unordered_map>
 #endif
-#if (!defined(_WIN32) && (!defined(__APPLE__) && !defined(__MACH__)))
+#if (defined(_WIN32) && (!defined(__APPLE__) && !defined(__MACH__)))
 #include <SDL.h>
 #include <SDL_opengl.h>
+#include <X11/Xlib.h>
+#include <X11/Xutil.h>
+#include <GL/gl.h>
+#include <GL/glx.h>
 #endif
 #if defined(_WIN32)
 #include <winsock2.h>
@@ -94,7 +98,7 @@ namespace ngs::sys {
 
 /* Define CREATE_CONTEXT in your build scripts or Makefiles if
 the calling process hasn't already done this on its own ... */
-#if (!defined(_WIN32) && (!defined(__APPLE__) && !defined(__MACH__)))
+#if (defined(_WIN32) && (!defined(__APPLE__) && !defined(__MACH__)))
 #if defined(CREATE_CONTEXT)
 static SDL_Window *window = nullptr;
 static bool create_context() {
@@ -117,10 +121,10 @@ static bool create_context() {
 #endif
 
 struct HumanReadable {
-  long double size{};
+  long double size = 0;
   private: friend
   std::ostream& operator<<(std::ostream& os, HumanReadable hr) {
-    int i{};
+    int i = 0;
     long double mantissa = hr.size;
     for (; mantissa >= 1024; mantissa /= 1024, i++) { }
     mantissa = std::ceil(mantissa * 100) / 100;
@@ -162,7 +166,7 @@ std::string utsname_sysname() {
   #endif
   #else
   const char *result = nullptr;
-  char buf[255]; 
+  char buf[255];
   DWORD sz = sizeof(buf);
   if (RegGetValueA(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\\", "OS", RRF_RT_REG_SZ, nullptr, &buf, &sz) == ERROR_SUCCESS) {
     result = buf;
@@ -205,7 +209,7 @@ std::string utsname_nodename() {
   wVersionRequested = MAKEWORD(2, 2);
   if (!WSAStartup(wVersionRequested, &data)) {
     if (!gethostname(buf, sizeof(buf))) {
-      result = buf;    
+      result = buf;
     }
     WSACleanup();
   }
@@ -220,7 +224,7 @@ std::string windows_version(std::string *product_name) {
   auto GetOSMajorVersionNumber = []() {
     const char *result = nullptr;
     char buf[10];
-    int val = 0;  
+    int val = 0;
     DWORD sz = sizeof(val);
     if (RegGetValueA(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\", "CurrentMajorVersionNumber", RRF_RT_REG_DWORD, nullptr, &val, &sz) == ERROR_SUCCESS) {
       if (sprintf(buf, "%d", val) != -1) {
@@ -234,7 +238,7 @@ std::string windows_version(std::string *product_name) {
   auto GetOSMinorVersionNumber = []() {
     const char *result = nullptr;
     char buf[10];
-    int val = 0; 
+    int val = 0;
     DWORD sz = sizeof(val);
     if (RegGetValueA(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\", "CurrentMinorVersionNumber", RRF_RT_REG_DWORD, nullptr, &val, &sz) == ERROR_SUCCESS) {
       if (sprintf(buf, "%d", val) != -1) {
@@ -247,7 +251,7 @@ std::string windows_version(std::string *product_name) {
   };
   auto GetOSBuildNumber = []() {
     const char *result = nullptr;
-    char buf[255]; 
+    char buf[255];
     DWORD sz = sizeof(buf);
     if (RegGetValueA(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\", "CurrentBuildNumber", RRF_RT_REG_SZ, nullptr, &buf, &sz) == ERROR_SUCCESS) {
       result = buf;
@@ -259,7 +263,7 @@ std::string windows_version(std::string *product_name) {
   auto GetOSRevisionNumber = []() {
     char *result = nullptr;
     char buf[10];
-    int val = 0; 
+    int val = 0;
     DWORD sz = sizeof(val);
     if (RegGetValueA(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\", "UBR", RRF_RT_REG_DWORD, nullptr, &val, &sz) == ERROR_SUCCESS) {
       if (sprintf(buf, "%d", val) != -1) {
@@ -322,7 +326,7 @@ std::string utsname_release() {
   #endif
   #else
   std::string product_name;
-  return windows_version(&product_name);    
+  return windows_version(&product_name);
   #endif
 }
 
@@ -472,15 +476,15 @@ std::string utsname_machine() {
   SYSTEM_INFO sysinfo;
   GetNativeSystemInfo(&sysinfo);
   if (sysinfo.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_AMD64) {
-    return "AMD64";  
+    return "AMD64";
   } else if (sysinfo.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_ARM) {
     return "ARM";
   } else if (sysinfo.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_ARM64) {
-    return "ARM64"; 
+    return "ARM64";
   } else if (sysinfo.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_IA64) {
-    return "IA64"; 
+    return "IA64";
   } else if (sysinfo.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_INTEL) {
-    return "x86"; 
+    return "x86";
   }
   return "";
   #endif
@@ -568,7 +572,7 @@ long long memory_availram() {
   #elif defined(__sun)
   return (sysconf(_SC_AVPHYS_PAGES) * sysconf(_SC_PAGESIZE));
   #else
-  return -1;  
+  return -1;
   #endif
 }
 
@@ -594,7 +598,7 @@ long long memory_usedram() {
   }
   return -1;
   #else
-  return -1;  
+  return -1;
   #endif
 }
 
@@ -618,7 +622,7 @@ long long memory_totalvmem() {
   if (!sysinfo(&info)) {
     return info.totalswap;
   }
-  return -1;  
+  return -1;
   #elif (defined(__FreeBSD__) || defined(__DragonFly__))
   kvm_t *kvmh = nullptr;
   long page_s = sysconf(_SC_PAGESIZE);
@@ -931,7 +935,9 @@ std::string gpu_renderer() {
     if (pFactory->EnumAdapters(0, &pAdapter) == S_OK) {
       DXGI_ADAPTER_DESC adapterDesc;
       if (pAdapter->GetDesc(&adapterDesc) == S_OK) {
-        result = narrow(adapterDesc.Description);
+        static std::string res;
+        res = narrow(adapterDesc.Description);
+        result = res.c_str();
       }
     }
     pAdapter->Release();
@@ -990,18 +996,11 @@ long long gpu_videomemory() {
     pclose(fp);
   }
   #else
-  char buf[1024];
-  /* needs glxinfo installed via mesa-utils (Ubuntu), glx-utils (FreeBSD), or equivalent distro package */
-  FILE *fp = popen("glxinfo 2> /dev/null | grep 'Video memory: ' | uniq | awk -F ': ' '{print $2}'", "r");
-  if (fp) {
-    if (fgets(buf, sizeof(buf), fp)) {
-      buf[strlen(buf) - 1] = '\0';
-      if (strlen(buf)) {
-        result = strtoll(buf, nullptr, 10) * 1024 * 1024;
-      }
-    }
-    pclose(fp);
-  }
+  unsigned int v = 0;
+  PFNGLXQUERYCURRENTRENDERERINTEGERMESAPROC queryInteger;
+  queryInteger = (PFNGLXQUERYCURRENTRENDERERINTEGERMESAPROC)glXGetProcAddressARB((const GLubyte *)"glXQueryCurrentRendererIntegerMESA");
+  queryInteger(GLX_RENDERER_VIDEO_MEMORY_MESA, v);
+  return *v * 1024 * 1024;;
   #endif
   videomemory = result;
   return result;
@@ -1094,7 +1093,7 @@ std::string cpu_vendor() {
 std::string cpu_brand() {
   #if defined(_WIN32)
   const char *result = nullptr;
-  char buf[255]; 
+  char buf[255];
   DWORD sz = sizeof(buf);
   if (RegGetValueA(HKEY_LOCAL_MACHINE, "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0\\", "ProcessorNameString", RRF_RT_REG_SZ, nullptr, &buf, &sz) == ERROR_SUCCESS) {
     result = buf;
@@ -1154,7 +1153,7 @@ std::string cpu_brand() {
 
 static int numcores = -1;
 int cpu_numcores() {
-  if (numcores != -1) { 
+  if (numcores != -1) {
     return numcores;
   }
   #if defined(_WIN32)
@@ -1175,7 +1174,7 @@ int cpu_numcores() {
   si.hStdError = stdout_write;
   si.hStdOutput = stdout_write;
   si.hStdInput = stdin_read;
-  PROCESS_INFORMATION pi; 
+  PROCESS_INFORMATION pi;
   ZeroMemory(&pi, sizeof(pi));
   std::vector<wchar_t> cwstr_command;
   std::wstring wstr_command = L"wmic cpu get NumberOfCores";
@@ -1214,7 +1213,7 @@ int cpu_numcores() {
     result = std::regex_replace(result, std::regex(" "), "");
     result = std::regex_replace(result, std::regex("\r"), "");
     result = std::regex_replace(result, std::regex("\n"), "");
-    static std::string res; 
+    static std::string res;
     res = result;
     numcores = (int)strtol(res.c_str(), nullptr, 10);
   }
