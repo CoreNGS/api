@@ -939,8 +939,7 @@ std::string gpu_renderer() {
         res = narrow(adapterDesc.Description);
         result = res.c_str();
       }
-    }
-    pAdapter->Release();
+      pAdapter->Release();
     }
     pFactory->Release();
   }
