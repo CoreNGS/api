@@ -1,20 +1,19 @@
 /*
 
  MIT License
-
- Copyright © 2021-2023 Samuel Venable
- Copyright © 2021-2023 devKathy
-
+ 
+ Copyright © 2023 Samuel Venable
+ 
  Permission is hereby granted, free of charge, to any person obtaining a copy
  of this software and associated documentation files (the "Software"), to deal
  in the Software without restriction, including without limitation the rights
  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
  copies of the Software, and to permit persons to whom the Software is
  furnished to do so, subject to the following conditions:
-
+ 
  The above copyright notice and this permission notice shall be included in all
  copies or substantial portions of the Software.
-
+ 
  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -22,67 +21,863 @@
  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  SOFTWARE.
-
+ 
 */
 
+#if (defined(_WIN32) && defined(_MSC_VER))
+#ifndef _CRT_SECURE_NO_WARNINGS
+#define _CRT_SECURE_NO_WARNINGS
+#endif
+#endif
 #include <unordered_map>
 #include <algorithm>
+#include <iomanip>
+#include <fstream>
 #include <sstream>
+#include <vector>
+#include <string>
 #include <thread>
-#include <mutex>
-
+#include <regex>
 #include <cstdlib>
-#include <cstddef>
-#include <cstdint>
 #include <cstring>
-#include <climits>
 #include <cstdio>
-
-#include "process.hpp"
-
-#if !defined(_WIN32)
-#include <signal.h>
-#include <unistd.h>
+#include <cmath>
+#if (!defined(_WIN32) && (!defined(__APPLE__) && !defined(__MACH__)))
+#include <SDL.h>
+#include <SDL_opengl.h>
+#include <X11/Xlib.h>
+#include <X11/Xutil.h>
+#include <GL/gl.h>
+#include <GL/glx.h>
+#endif
+#if defined(_WIN32)
+#include <winsock2.h>
+#include <windows.h>
+#include <dxgi.h>
+#else
+#if defined(__linux__)
+#include <sys/sysinfo.h>
+#endif
+#if ((defined(__APPLE__) && defined(__MACH__)) || defined(__FreeBSD__) || defined(__DragonFly__) || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__sun))
 #include <sys/types.h>
-#include <sys/wait.h>
-#include <sys/stat.h>
+#if (defined(__FreeBSD__) || defined(__DragonFly__))
 #include <fcntl.h>
+#include <kvm.h>
+#elif (defined(__NetBSD__) || defined(__OpenBSD__))
+#include <sys/param.h>
+#include <sys/swap.h>
+#endif
+#endif
+#if !defined(__sun)
+#if !defined(__linux__)
+#include <sys/sysctl.h>
+#endif
+#include <sys/utsname.h>
+#else
+#include <sys/systeminfo.h>
+#include <sys/swap.h>
+#endif
+#include <unistd.h>
+#endif
+#if (defined(_WIN32) && defined(_MSC_VER))
+#pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "dxgi.lib")
+#endif
+
+#include "pci.ids.hpp"
+#include "system.hpp"
+
+namespace ngs::sys {
+
+/* Define CREATE_CONTEXT in your build scripts or Makefiles if
+the calling process hasn't already done this on its own ... */
+#if (!defined(_WIN32) && (!defined(__APPLE__) && !defined(__MACH__)))
+#if defined(CREATE_CONTEXT)
+static SDL_Window *window = nullptr;
+static bool create_context() {
+  if (!window) {
+    #if (defined(__linux__) || defined(__FreeBSD__) || defined(__DragonFly__) || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__sun))
+    setenv("SDL_VIDEODRIVER", "x11", 1);
+    SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0");
+    #endif
+    if (SDL_Init(SDL_INIT_VIDEO)) return false;
+    window = SDL_CreateWindow("", 0, 0, 1, 1, SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN);
+    if (!window) return false;
+    SDL_GLContext context = SDL_GL_CreateContext(window);
+    if (!context) return false;
+    int err = SDL_GL_MakeCurrent(window, context);
+    if (err) return false;
+  }
+  return true;
+}
+#endif
 #endif
 
 #if defined(_WIN32)
-#include <shlwapi.h>
-#include <objbase.h>
-#include <tlhelp32.h>
-#include <winternl.h>
-#include <psapi.h>
-#elif (defined(__APPLE__) && defined(__MACH__))
-#include <sys/sysctl.h>
-#include <libproc.h>
-#elif (defined(__linux__) || defined(__ANDROID__))
-#include <dirent.h>
-#elif (defined(__FreeBSD__) || defined(__DragonFly__) || defined(__OpenBSD__))
-#include <sys/param.h>
-#include <sys/sysctl.h>
-#include <sys/user.h>
-#include <kvm.h>
-#elif defined(__NetBSD__)
-#include <sys/param.h>
-#include <sys/sysctl.h>
-#include <kvm.h>
-#elif defined(__sun)
-#include <kvm.h>
-#include <sys/param.h>
-#include <sys/time.h>
-#include <sys/proc.h>
+static std::string read_output(std::wstring cmd) {
+  std::string result;
+  bool proceed = true;
+  HANDLE stdin_read = nullptr; HANDLE stdin_write = nullptr;
+  HANDLE stdout_read = nullptr; HANDLE stdout_write = nullptr;
+  SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES), nullptr, true };
+  proceed = CreatePipe(&stdin_read, &stdin_write, &sa, 0);
+  if (!proceed) return "";
+  SetHandleInformation(stdin_write, HANDLE_FLAG_INHERIT, 0);
+  proceed = CreatePipe(&stdout_read, &stdout_write, &sa, 0);
+  if (!proceed) return "";
+  STARTUPINFOW si;
+  ZeroMemory(&si, sizeof(si));
+  si.cb = sizeof(STARTUPINFOW);
+  si.dwFlags = STARTF_USESTDHANDLES;
+  si.hStdError = stdout_write;
+  si.hStdOutput = stdout_write;
+  si.hStdInput = stdin_read;
+  PROCESS_INFORMATION pi;
+  ZeroMemory(&pi, sizeof(pi));
+  std::vector<wchar_t> ccmd;
+  ccmd.resize(cmd.length() + 1, L'\0');
+  wcsncpy_s(&ccmd[0], cmd.length() + 1, cmd.c_str(), cmd.length() + 1);
+  BOOL success = CreateProcessW(nullptr, &ccmd[0], nullptr, nullptr, true, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+  if (success) {
+    DWORD nRead = 0;
+    char buffer[BUFSIZ];
+    CloseHandle(stdout_write);
+    CloseHandle(stdin_read);
+    HANDLE wait_handles[] = { pi.hProcess, stdout_read };
+    while (MsgWaitForMultipleObjects(2, wait_handles, false, 5, QS_ALLEVENTS) != WAIT_OBJECT_0) {
+      MSG msg;
+      while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+      }
+      while (ReadFile(stdout_read, buffer, BUFSIZ, &nRead, nullptr) && nRead) {
+        MSG msg;
+        while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
+          TranslateMessage(&msg);
+          DispatchMessage(&msg);
+        }
+        buffer[nRead] = '\0';
+        result.append(buffer, nRead);
+      }
+    }
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    CloseHandle(stdout_read);
+    CloseHandle(stdin_write);
+  }
+  return result;
+}
+
+static std::string windows_version(std::string *product_name) {
+  auto GetOSMajorVersionNumber = []() {
+    const char *result = nullptr;
+    char buf[1024];
+    int val = 0;
+    DWORD sz = sizeof(val);
+    if (RegGetValueA(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\", "CurrentMajorVersionNumber", RRF_RT_REG_DWORD, nullptr, &val, &sz) == ERROR_SUCCESS) {
+      if (sprintf(buf, "%d", val) != -1) {
+        result = buf;
+      }
+    }
+    std::string str;
+    str = result ? result : "";
+    return str;
+  };
+  auto GetOSMinorVersionNumber = []() {
+    const char *result = nullptr;
+    char buf[1024];
+    int val = 0;
+    DWORD sz = sizeof(val);
+    if (RegGetValueA(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\", "CurrentMinorVersionNumber", RRF_RT_REG_DWORD, nullptr, &val, &sz) == ERROR_SUCCESS) {
+      if (sprintf(buf, "%d", val) != -1) {
+        result = buf;
+      }
+    }
+    std::string str;
+    str = result ? result : "";
+    return str;
+  };
+  auto GetOSBuildNumber = []() {
+    const char *result = nullptr;
+    char buf[1024];
+    DWORD sz = sizeof(buf);
+    if (RegGetValueA(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\", "CurrentBuildNumber", RRF_RT_REG_SZ, nullptr, &buf, &sz) == ERROR_SUCCESS) {
+      result = buf;
+    }
+    std::string str;
+    str = result ? result : "";
+    return str;
+  };
+  auto GetOSRevisionNumber = []() {
+    char *result = nullptr;
+    char buf[1924];
+    int val = 0;
+    DWORD sz = sizeof(val);
+    if (RegGetValueA(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\", "UBR", RRF_RT_REG_DWORD, nullptr, &val, &sz) == ERROR_SUCCESS) {
+      if (sprintf(buf, "%d", val) != -1) {
+        result = buf;
+      }
+    }
+    std::string str;
+    str = strlen(result) ? result : "";
+    return str;
+  };
+  static const char *result = nullptr;
+  char buf[1024];
+  if (!GetOSMajorVersionNumber().empty() && !GetOSMinorVersionNumber().empty() && !GetOSBuildNumber().empty() && !GetOSRevisionNumber().empty()) {
+    if (sprintf(buf, "%s.%s.%s.%s", GetOSMajorVersionNumber().c_str(), GetOSMinorVersionNumber().c_str(), GetOSBuildNumber().c_str(), GetOSRevisionNumber().c_str()) != -1) {
+      result = buf;
+      char buf[1024];
+      DWORD sz = sizeof(buf);
+      if (RegGetValueA(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\", "ProductName", RRF_RT_REG_SZ, nullptr, &buf, &sz) == ERROR_SUCCESS) {
+        if (strtoull(GetOSMajorVersionNumber().c_str(), nullptr, 10) == 10 && strtoull(GetOSBuildNumber().c_str(), nullptr, 10) >= 22000) {
+          std::string tmp = strlen(buf) ? buf : "";
+          if (!tmp.empty()) {
+            tmp = std::regex_replace(tmp, std::regex("10"), "11");
+            *product_name = tmp;
+          }
+        } else {
+          *product_name = strlen(buf) ? buf : "";
+        }
+      }
+    }
+  }
+  std::string str;
+  str = result ? result : "";
+  return str;
+}
 #endif
 
-#if (defined(_WIN32) && defined(_MSC_VER))
-#pragma comment(lib, "ntdll.lib")
-#endif
+struct HumanReadable {
+  long double size = 0;
+  private: friend
+  std::ostream& operator<<(std::ostream& os, HumanReadable hr) {
+    int i = 0;
+    long double mantissa = hr.size;
+    for (; mantissa >= 1024; mantissa /= 1024, i++) {
+      #if defined(_WIN32)
+      MSG msg;
+      while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+      }
+      #endif
+    }
+    mantissa = std::ceil(mantissa * 100) / 100;
+    os << mantissa << " " << "BKMGTPE"[i];
+    return !i ? os : os << "B";
+  }
+};
 
-namespace {
+std::string human_readable(long double nbytes) {
+  if (nbytes == -1) return "";
+  std::stringstream ss;
+  ss << HumanReadable{nbytes};
+  return ss.str();
+}
 
-  void message_pump() {
+std::string utsname_sysname() {
+  #if !defined(_WIN32)
+  #if !defined(__sun)
+  const char *result = nullptr;
+  struct utsname name;
+  if (!uname(&name))
+    result = name.sysname;
+  std::string str;
+  str = result ? result : "";
+  return str;
+  #else
+  std::string res;
+  long count = sysinfo(SI_SYSNAME, nullptr, 0);
+  if (count > 0) {
+    char *buf = (char *)calloc(count, sizeof(char));
+    if (buf) {
+      if (sysinfo(SI_SYSNAME, buf, count) > 0) {
+        res = buf;
+      }
+      free(buf);
+    }
+  }
+  return res;
+  #endif
+  #else
+  const char *result = nullptr;
+  char buf[1024];
+  DWORD sz = sizeof(buf);
+  if (RegGetValueA(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\\", "OS", RRF_RT_REG_SZ, nullptr, &buf, &sz) == ERROR_SUCCESS) {
+    result = buf;
+  }
+  std::string str;
+  str = result ? result : "";
+  return str;
+  #endif
+}
+
+std::string utsname_nodename() {
+  #if !defined(_WIN32)
+  #if !defined(__sun)
+  const char *result = nullptr;
+  struct utsname name;
+  if (!uname(&name))
+    result = name.nodename;
+  std::string str;
+  str = result ? result : "";
+  return str;
+  #else
+  std::string res;
+  long count = sysinfo(SI_HOSTNAME, nullptr, 0);
+  if (count > 0) {
+    char *buf = (char *)calloc(count, sizeof(char));
+    if (buf) {
+      if (sysinfo(SI_HOSTNAME, buf, count) > 0) {
+        res = buf;
+      }
+      free(buf);
+    }
+  }
+  return res;
+  #endif
+  #else
+  const char *result = nullptr;
+  char buf[1024];
+  WSADATA data;
+  WORD wVersionRequested;
+  wVersionRequested = MAKEWORD(2, 2);
+  if (!WSAStartup(wVersionRequested, &data)) {
+    if (!gethostname(buf, sizeof(buf))) {
+      result = buf;
+    }
+    WSACleanup();
+  }
+  std::string str;
+  str = result ? result : "";
+  return str;
+  #endif
+}
+
+std::string utsname_release() {
+  #if !defined(_WIN32)
+  #if !defined(__sun)
+  const char *result = nullptr;
+  struct utsname name;
+  if (!uname(&name))
+    result = name.release;
+  std::string str;
+  str = result ? result : "";
+  return str;
+  #else
+  std::string res;
+  long count = sysinfo(SI_RELEASE, nullptr, 0);
+  if (count > 0) {
+    char *buf = (char *)calloc(count, sizeof(char));
+    if (buf) {
+      if (sysinfo(SI_RELEASE, buf, count) > 0) {
+        res = buf;
+      }
+      free(buf);
+    }
+  }
+  return res;
+  #endif
+  #else
+  std::string product_name;
+  return windows_version(&product_name);
+  #endif
+}
+
+std::string utsname_version() {
+  #if !defined(_WIN32)
+  #if !defined(__sun)
+  #if !defined(__DragonFly__)
+  const char *result = nullptr;
+  struct utsname name;
+  if (!uname(&name))
+    result = name.version;
+  std::string str;
+  str = result ? result : "";
+  return str;
+  #else
+  char buf[1024];
+  const char *result = nullptr;
+  FILE *fp = popen("uname -v", "r");
+  if (fp) {
+    if (fgets(buf, sizeof(buf), fp)) {
+      buf[strlen(buf) - 1] = '\0';
+      result = buf;
+    }
+    pclose(fp);
+    static std::string str;
+    str = result ? result : "";
+    return str;
+  }
+  return "";
+  #endif
+  #else
+  std::string res;
+  long count = sysinfo(SI_VERSION, nullptr, 0);
+  if (count > 0) {
+    char *buf = (char *)calloc(count, sizeof(char));
+    if (buf) {
+      if (sysinfo(SI_VERSION, buf, count) > 0) {
+        res = buf;
+      }
+      free(buf);
+    }
+  }
+  return res;
+  #endif
+  #else
+  std::string result = read_output(L"cmd /c ver");
+  if (!result.empty()) {
+    result = std::regex_replace(result, std::regex("\r"), "");
+    result = std::regex_replace(result, std::regex("\n"), "");
+    static std::string res;
+    res = result;
+	return res;
+  }
+  return "";
+  #endif
+}
+
+std::string utsname_codename() {
+  #if defined(_WIN32)
+  std::string product_name;
+  windows_version(&product_name);
+  return product_name;
+  #elif (defined(__APPLE__) && defined(__MACH__))
+  std::string result;
+  FILE *fp = popen("echo $(sw_vers | grep 'ProductName:' | uniq | awk 'NR==1{$1=$1;print}' && sw_vers | grep 'ProductVersion:' | uniq | awk 'NR==1{$1=$1;print}')", "r");
+  if (fp) {
+    char buf[1024];
+    if (fgets(buf, sizeof(buf), fp)) {
+      buf[strlen(buf) - 1] = '\0';
+      result = strlen(buf) ? buf : "";
+      result = std::regex_replace(result, std::regex("ProductName: "), "");
+      result = std::regex_replace(result, std::regex("ProductVersion: "), "");
+      std::fstream doc;
+      doc.open("/System/Library/CoreServices/Setup Assistant.app/Contents/Resources/en.lproj/OSXSoftwareLicense.rtf", std::ios::in);
+      if (doc.is_open()){
+        std::string tmp1;
+        while(std::getline(doc, tmp1)) {
+          std::string tmp2 = tmp1;
+          std::transform(tmp1.begin(), tmp1.end(), tmp1.begin(), ::toupper);
+          std::size_t pos1 = tmp1.find("SOFTWARE LICENSE AGREEMENT FOR MAC OS X");
+          std::size_t pos2 = tmp1.find("SOFTWARE LICENSE AGREEMENT FOR MACOS");
+          std::size_t len1 = strlen("SOFTWARE LICENSE AGREEMENT FOR MAC OS X");
+          std::size_t len2 = strlen("SOFTWARE LICENSE AGREEMENT FOR MACOS");
+          if (pos1 != std::string::npos) {
+            result += tmp2.substr(pos1 + len1);
+            result = result.substr(0, result.length() - 1);
+            break;
+          } else if (pos2 != std::string::npos) {
+            result += tmp2.substr(pos2 + len2);
+            result = result.substr(0, result.length() - 1);
+            break;
+          }
+        }
+        doc.close();
+      }
+    }
+  }
+  static std::string str = result;
+  return str;
+  #elif defined(__linux__)
+  std::string result;
+  FILE *fp = popen("echo $(lsb_release --id && lsb_release --release && lsb_release --codename) |  tr '\n' ' '", "r");
+  if (fp) {
+    char buf[1024];
+    if (fgets(buf, sizeof(buf), fp)) {
+      buf[strlen(buf) - 1] = '\0';
+      std::string tmp = strlen(buf) ? buf : "";
+      if (!tmp.empty()) {
+        tmp = std::regex_replace(tmp, std::regex("Distributor ID: "), "");
+        tmp = std::regex_replace(tmp, std::regex("Release: "), "");
+        tmp = std::regex_replace(tmp, std::regex("Codename: "), "");
+      }
+      result = tmp;
+    }
+    pclose(fp);
+  }
+  static std::string str = result;
+  return str;
+  #elif !defined(__sun)
+  return utsname_sysname() + " " + utsname_release();
+  #else
+  char *buf = nullptr;
+  std::size_t len = 0;
+  std::string buffer;
+  FILE *file = popen("cat /etc/release | awk 'NR==1{$1=$1;print}'", "r");
+  if (file) {
+    if (getline(&buf, &len, file) != -1) {
+      buffer = buf;
+      free(buf);
+    }
+    pclose(file);
+  }
+  if (!buffer.empty() && buffer.back() == '\n')
+    buffer.pop_back();
+  static std::string result;
+  result = buffer;
+  return result;
+  #endif
+  return "";
+}
+
+std::string utsname_machine() {
+  #if !defined(_WIN32)
+  #if !defined(__sun)
+  const char *result = nullptr;
+  struct utsname name;
+  if (!uname(&name))
+    result = name.machine;
+  std::string str;
+  str = result ? result : "";
+  return str;
+  #else
+  std::string res;
+  long count = sysinfo(SI_ARCHITECTURE_NATIVE, nullptr, 0);
+  if (count > 0) {
+    char *buf = (char *)calloc(count, sizeof(char));
+    if (buf) {
+      if (sysinfo(SI_ARCHITECTURE_NATIVE, buf, count) > 0) {
+        res = buf;
+      }
+      free(buf);
+    }
+  }
+  return res;
+  #endif
+  #else
+  const char *result = nullptr;
+  char buf[1024];
+  DWORD sz = sizeof(buf);
+  if (RegGetValueA(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\\", "PROCESSOR_ARCHITECTURE", RRF_RT_REG_SZ, nullptr, &buf, &sz) == ERROR_SUCCESS) {
+    result = buf;
+  }
+  std::string str;
+  str = result ? result : "";
+  return str;
+  #endif
+}
+
+long long memory_totalram() {
+  #if defined(_WIN32)
+  MEMORYSTATUSEX statex;
+  statex.dwLength = sizeof(statex);
+  if (GlobalMemoryStatusEx(&statex)) {
+    return (long long)statex.ullTotalPhys;
+  }
+  return -1;
+  #elif ((defined(__APPLE__) && defined(__MACH__)) || defined(__FreeBSD__) || defined(__DragonFly__) || defined(__NetBSD__) || defined(__OpenBSD__))
+  int mib[2];
+  long long physical_memory = -1;
+  mib[0] = CTL_HW;
+  #if (defined(__APPLE__) && defined(__MACH__))
+  mib[1] = HW_MEMSIZE;
+  #elif (defined(__FreeBSD__) || defined(__DragonFly__))
+  mib[1] = HW_PHYSMEM;
+  #else
+  mib[1] = HW_PHYSMEM64;
+  #endif
+  std::size_t len = sizeof(long long);
+  if (!sysctl(mib, 2, &physical_memory, &len, nullptr, 0)) {
+    return physical_memory;
+  }
+  return -1;
+  #elif defined(__linux__)
+  struct sysinfo info;
+  if (!sysinfo(&info)) {
+    return info.totalram;
+  }
+  return -1;
+  #elif defined(__sun)
+  char buf[1024];
+  long long total = -1;
+  const char *result = nullptr;
+  FILE *fp = popen("prtconf | grep 'Memory size:' | uniq | cut -d' ' -f3- | awk '{print $1 * 1024};'", "r");
+  if (fp) {
+    if (fgets(buf, sizeof(buf), fp)) {
+      buf[strlen(buf) - 1] = '\0';
+      result = buf;
+    }
+    pclose(fp);
+    static std::string str;
+    str = (result && strlen(result)) ? result : "-1";
+    total = strtoll(str.c_str(), nullptr, 10) * 1024;
+  }
+  return total;
+  #else
+  return -1;
+  #endif
+}
+
+long long memory_availram() {
+  #if defined(_WIN32)
+  MEMORYSTATUSEX statex;
+  statex.dwLength = sizeof(statex);
+  if (GlobalMemoryStatusEx(&statex)) {
+    return (long long)statex.ullAvailPhys;
+  }
+  return -1;
+  #elif ((defined(__APPLE__) && defined(__MACH__)) || defined(__FreeBSD__) || defined(__DragonFly__) || defined(__NetBSD__) || defined(__OpenBSD__))
+  int mib[2];
+  long long user_memory = 0;
+  mib[0] = CTL_HW;
+  #if ((defined(__APPLE__) && defined(__MACH__)) || defined(__FreeBSD__) || defined(__DragonFly__))
+  mib[1] = HW_USERMEM;
+  #else
+  mib[1] = HW_USERMEM64;
+  #endif
+  std::size_t len = sizeof(long long);
+  if (!sysctl(mib, 2, &user_memory, &len, nullptr, 0)) {
+    return user_memory;
+  }
+  return -1;
+  #elif defined(__linux__)
+  struct sysinfo info;
+  if (!sysinfo(&info)) {
+    return info.freeram;
+  }
+  return -1;
+  #elif defined(__sun)
+  return (sysconf(_SC_AVPHYS_PAGES) * sysconf(_SC_PAGESIZE));
+  #else
+  return -1;
+  #endif
+}
+
+long long memory_usedram() {
+  #if defined(_WIN32)
+  MEMORYSTATUSEX statex;
+  statex.dwLength = sizeof(statex);
+  if (GlobalMemoryStatusEx(&statex)) {
+    return (long long)(statex.ullTotalPhys - statex.ullAvailPhys);
+  }
+  return -1;
+  #elif ((defined(__APPLE__) && defined(__MACH__)) ||defined(__FreeBSD__) || defined(__DragonFly__) || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__sun))
+  long long total = memory_totalram();
+  long long avail = memory_availram();
+  if (total != -1 && avail != -1) {
+    return total - avail;
+  }
+  return -1;
+  #elif defined(__linux__)
+  struct sysinfo info;
+  if (!sysinfo(&info)) {
+    return info.totalram - info.freeram;
+  }
+  return -1;
+  #else
+  return -1;
+  #endif
+}
+
+long long memory_totalvmem() {
+  #if defined(_WIN32)
+  MEMORYSTATUSEX statex;
+  statex.dwLength = sizeof(statex);
+  if (GlobalMemoryStatusEx(&statex)) {
+    return (long long)statex.ullTotalPageFile;
+  }
+  return -1;
+  #elif (defined(__APPLE__) && defined(__MACH__))
+  struct xsw_usage info;
+  std::size_t len = sizeof(info);
+  if (!sysctlbyname("vm.swapusage", &info, &len, nullptr, 0)) {
+    return info.xsu_total;
+  }
+  return -1;
+  #elif defined(__linux__)
+  struct sysinfo info;
+  if (!sysinfo(&info)) {
+    return info.totalswap;
+  }
+  return -1;
+  #elif (defined(__FreeBSD__) || defined(__DragonFly__))
+  kvm_t *kvmh = nullptr;
+  long page_s = sysconf(_SC_PAGESIZE);
+  kvmh = kvm_open(nullptr, "/dev/null", "/dev/null", O_RDONLY, nullptr);
+  if (!kvmh) return -1;
+  struct kvm_swap k_swap;
+  if (kvm_getswapinfo(kvmh, &k_swap, 1, 0) != -1) {
+    kvm_close(kvmh);
+    return k_swap.ksw_total * page_s;
+  }
+  kvm_close(kvmh);
+  return -1;
+  #elif (defined(__NetBSD__) || defined(__OpenBSD__))
+  long long total = 0;
+  long block_s = 0;
+  int header_len = 0;
+  getbsize(&header_len, &block_s);
+  int nswap = swapctl(SWAP_NSWAP, nullptr, 0);
+  if (!nswap) return 0;
+  if (nswap > 0) {
+    struct swapent *swaps = (struct swapent *)calloc(nswap, sizeof(struct swapent));
+    if (swaps) {
+      if (swapctl(SWAP_STATS, swaps, nswap) > 0) {
+        for (int i = 0; i < nswap; i++) {
+          if (swaps[i].se_flags & SWF_ENABLE) {
+            total += ((swaps[i].se_nblks / (1024 / block_s)) * 1024);
+          }
+        }
+      }
+      free(swaps);
+    }
+    return total;
+  }
+  return -1;
+  #elif defined(__sun)
+  long page_s = sysconf(_SC_PAGESIZE);
+  struct anoninfo ai;
+  if (swapctl(SC_AINFO, &ai) != -1) {
+    return (ai.ani_max * page_s);
+  }
+  return -1;
+  #else
+  return -1;
+  #endif
+}
+
+long long memory_availvmem() {
+  #if defined(_WIN32)
+  MEMORYSTATUSEX statex;
+  statex.dwLength = sizeof(statex);
+  if (GlobalMemoryStatusEx(&statex)) {
+    return (long long)statex.ullAvailPageFile;
+  }
+  return -1;
+  #elif (defined(__APPLE__) && defined(__MACH__))
+  struct xsw_usage info;
+  std::size_t len = sizeof(info);
+  if (!sysctlbyname("vm.swapusage", &info, &len, nullptr, 0)) {
+    return info.xsu_avail;
+  }
+  return -1;
+  #elif defined(__linux__)
+  struct sysinfo info;
+  if (!sysinfo(&info)) {
+    return info.freeswap;
+  }
+  return -1;
+  #elif (defined(__FreeBSD__) || defined(__DragonFly__))
+  kvm_t *kvmh = nullptr;
+  long page_s = sysconf(_SC_PAGESIZE);
+  kvmh = kvm_open(nullptr, "/dev/null", "/dev/null", O_RDONLY, nullptr);
+  if (!kvmh) return -1;
+  struct kvm_swap k_swap;
+  if (kvm_getswapinfo(kvmh, &k_swap, 1, 0) != -1) {
+    kvm_close(kvmh);
+    return (k_swap.ksw_total - k_swap.ksw_used) * page_s;
+  }
+  kvm_close(kvmh);
+  return -1;
+  #elif (defined(__NetBSD__) || defined(__OpenBSD__))
+  long long avail = 0;
+  long block_s = 0;
+  int header_len = 0;
+  getbsize(&header_len, &block_s);
+  int nswap = swapctl(SWAP_NSWAP, nullptr, 0);
+  if (!nswap) return 0;
+  if (nswap > 0) {
+    struct swapent *swaps = (struct swapent *)calloc(nswap, sizeof(struct swapent));
+    if (swaps) {
+      if (swapctl(SWAP_STATS, swaps, nswap) > 0) {
+        for (int i = 0; i < nswap; i++) {
+          if (swaps[i].se_flags & SWF_ENABLE) {
+            avail += (((swaps[i].se_nblks - swaps[i].se_inuse) / (1024 / block_s)) * 1024);
+          }
+        }
+      }
+      free(swaps);
+    }
+    return avail;
+  }
+  return -1;
+  #elif defined(__sun)
+  long page_s = sysconf(_SC_PAGESIZE);
+  struct anoninfo ai;
+  if (swapctl(SC_AINFO, &ai) != -1) {
+    return (ai.ani_free * page_s);
+  }
+  return -1;
+  #else
+  return -1;
+  #endif
+}
+
+long long memory_usedvmem() {
+  #if defined(_WIN32)
+  MEMORYSTATUSEX statex;
+  statex.dwLength = sizeof(statex);
+  if (GlobalMemoryStatusEx(&statex)) {
+    return (long long)(statex.ullTotalPageFile - statex.ullAvailPageFile);
+  }
+  return -1;
+  #elif (defined(__APPLE__) && defined(__MACH__))
+  struct xsw_usage info;
+  std::size_t len = sizeof(info);
+  if (!sysctlbyname("vm.swapusage", &info, &len, nullptr, 0)) {
+    return info.xsu_used;
+  }
+  return -1;
+  #elif defined(__linux__)
+  struct sysinfo info;
+  if (!sysinfo(&info)) {
+    return info.totalswap - info.freeswap;
+  }
+  return -1;
+  #elif (defined(__FreeBSD__) || defined(__DragonFly__))
+  kvm_t *kvmh = nullptr;
+  long page_s = sysconf(_SC_PAGESIZE);
+  kvmh = kvm_open(nullptr, "/dev/null", "/dev/null", O_RDONLY, nullptr);
+  if (!kvmh) return -1;
+  struct kvm_swap k_swap;
+  if (kvm_getswapinfo(kvmh, &k_swap, 1, 0) != -1) {
+    kvm_close(kvmh);
+    return k_swap.ksw_used * page_s;
+  }
+  kvm_close(kvmh);
+  return -1;
+  #elif (defined(__NetBSD__) || defined(__OpenBSD__))
+  long long used = 0;
+  long block_s = 0;
+  int header_len = 0;
+  getbsize(&header_len, &block_s);
+  int nswap = swapctl(SWAP_NSWAP, nullptr, 0);
+  if (!nswap) return 0;
+  if (nswap > 0) {
+    struct swapent *swaps = (struct swapent *)calloc(nswap, sizeof(struct swapent));
+    if (swaps) {
+      if (swapctl(SWAP_STATS, swaps, nswap) > 0) {
+        for (int i = 0; i < nswap; i++) {
+          if (swaps[i].se_flags & SWF_ENABLE) {
+            used += ((swaps[i].se_inuse / (1024 / block_s)) * 1024);
+          }
+        }
+      }
+      free(swaps);
+    }
+    return used;
+  }
+  return -1;
+  #elif defined(__sun)
+  long page_s = sysconf(_SC_PAGESIZE);
+  struct anoninfo ai;
+  if (swapctl(SC_AINFO, &ai) != -1) {
+    return ((ai.ani_max * page_s) - (ai.ani_free * page_s));
+  }
+  return -1;
+  #else
+  return -1;
+  #endif
+}
+
+std::vector<std::string> string_split(std::string str, char delimiter) {
+  std::vector<std::string> vec;
+  std::stringstream sstr(str);
+  std::string tmp;
+  while (std::getline(sstr, tmp, delimiter)) {
     #if defined(_WIN32)
     MSG msg;
     while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -90,1562 +885,659 @@ namespace {
       DispatchMessage(&msg);
     }
     #endif
+    vec.push_back(tmp);
   }
+  return vec;
+}
 
-  std::vector<std::string> string_split_by_first_equals_sign(std::string str) {
-    std::size_t pos = 0;
-    std::vector<std::string> vec;
-    if ((pos = str.find_first_of("=")) != std::string::npos) {
-      vec.push_back(str.substr(0, pos));
-      vec.push_back(str.substr(pos + 1));
+unsigned int DeviceId = 0;
+unsigned int VendorId = 0;
+std::unordered_map<unsigned int, std::string> VendorNameById;
+std::unordered_map<unsigned int, std::string> DeviceNameById;
+std::string GetVendorOrDeviceNameById(unsigned int Id, int VendorOrDevice) {
+  if (VendorNameById.find(Id) != VendorNameById.end() && !VendorOrDevice) return VendorNameById[Id];
+  if (DeviceNameById.find(Id) != DeviceNameById.end() && VendorOrDevice) return DeviceNameById[Id];
+  std::string str(pci_ids, pci_ids + sizeof(pci_ids) / sizeof(pci_ids[0]));
+  str = std::regex_replace(str, std::regex("\r"), "");
+  std::vector<std::string> vec = string_split(str, '\n');
+  for (std::size_t i = 0; i < vec.size(); i++) {
+    #if defined(_WIN32)
+    MSG msg;
+    while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
+      TranslateMessage(&msg);
+      DispatchMessage(&msg);
     }
-    return vec;
+    #endif
+    if (vec[i].empty() || (!vec[i].empty() && vec[i][0] == '#')) {
+      continue;
+    }
+    std::size_t pos1 = vec[i].find(" ");
+    if (pos1 != std::string::npos && vec[i][0] != '\t') {
+      std::istringstream converter1(vec[i].substr(0, pos1));
+      converter1 >> std::hex >> VendorId;
+      VendorNameById[VendorId] = vec[i].substr(pos1 + 2);
+    }
+    if (VendorNameById[VendorId] != VendorNameById[Id]) {
+      continue;
+    }
+    std::size_t pos2 = vec[i].find("\t\t");
+    if (pos2 == std::string::npos && vec[i][0] == '\t') {
+      std::size_t pos3 = vec[i].find(" ");
+      if (pos3 != std::string::npos) {
+        std::istringstream converter2(vec[i].substr(1, 4));
+        converter2 >> std::hex >> DeviceId;
+        DeviceNameById[DeviceId] = &vec[i].substr(pos3)[2];
+      }
+    }
   }
+  return VendorOrDevice ? DeviceNameById[Id] : VendorNameById[Id];
+}
 
+static std::string gpuvendor;
+std::string gpu_vendor() {
+  if (!gpuvendor.empty()) return gpuvendor;
+  std::string result;
   #if defined(_WIN32)
-  enum MEMTYP {
-    MEMCMD,
-    MEMENV,
-    MEMCWD
-  };
-
-  #if !defined(_MSC_VER)
-  #pragma pack(push, 8)
-  #else
-  #include <pshpack8.h>
-  #endif
-
-  /* CURDIR struct from:
-   https://github.com/processhacker/phnt/
-   CC BY 4.0 licence */
-
-  typedef struct {
-    UNICODE_STRING DosPath;
-    HANDLE Handle;
-  } CURDIR;
-
-  /* RTL_DRIVE_LETTER_CURDIR struct from:
-   https://github.com/processhacker/phnt/
-   CC BY 4.0 licence */
-
-  typedef struct {
-    USHORT Flags;
-    USHORT Length;
-    ULONG TimeStamp;
-    STRING DosPath;
-  } RTL_DRIVE_LETTER_CURDIR;
-
-  /* RTL_USER_PROCESS_PARAMETERS struct from:
-   https://github.com/processhacker/phnt/
-   CC BY 4.0 licence */
-
-  typedef struct {
-    ULONG MaximumLength;
-    ULONG Length;
-    ULONG Flags;
-    ULONG DebugFlags;
-    HANDLE ConsoleHandle;
-    ULONG ConsoleFlags;
-    HANDLE StandardInput;
-    HANDLE StandardOutput;
-    HANDLE StandardError;
-    CURDIR CurrentDirectory;
-    UNICODE_STRING DllPath;
-    UNICODE_STRING ImagePathName;
-    UNICODE_STRING CommandLine;
-    PVOID Environment;
-    ULONG StartingX;
-    ULONG StartingY;
-    ULONG CountX;
-    ULONG CountY;
-    ULONG CountCharsX;
-    ULONG CountCharsY;
-    ULONG FillAttribute;
-    ULONG WindowFlags;
-    ULONG ShowWindowFlags;
-    UNICODE_STRING WindowTitle;
-    UNICODE_STRING DesktopInfo;
-    UNICODE_STRING ShellInfo;
-    UNICODE_STRING RuntimeData;
-    RTL_DRIVE_LETTER_CURDIR CurrentDirectories[32];
-    ULONG_PTR EnvironmentSize;
-    ULONG_PTR EnvironmentVersion;
-    PVOID PackageDependencyData;
-    ULONG ProcessGroupId;
-    ULONG LoaderThreads;
-    UNICODE_STRING RedirectionDllName;
-    UNICODE_STRING HeapPartitionName;
-    ULONG_PTR DefaultThreadpoolCpuSetMasks;
-    ULONG DefaultThreadpoolCpuSetMaskCount;
-  } RTL_USER_PROCESS_PARAMETERS;
-
-  #if !defined(_MSC_VER)
-  #pragma pack(pop)
-  #else
-  #include <poppack.h>
-  #endif
-
-  std::wstring widen(std::string str) {
-    if (str.empty()) return L"";
-    std::size_t wchar_count = str.size() + 1;
-    std::vector<wchar_t> buf(wchar_count);
-    return std::wstring{ buf.data(), (std::size_t)MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, buf.data(), (int)wchar_count) };
+  IDXGIFactory *pFactory = nullptr;
+  if (CreateDXGIFactory(__uuidof(IDXGIFactory), (void **)&pFactory) == S_OK) {
+    IDXGIAdapter *pAdapter = nullptr;
+    if (pFactory->EnumAdapters(0, &pAdapter) == S_OK) {
+      DXGI_ADAPTER_DESC adapterDesc;
+      if (pAdapter->GetDesc(&adapterDesc) == S_OK) {
+        result = GetVendorOrDeviceNameById(adapterDesc.VendorId, 0);
+      }
+      pAdapter->Release();
+    }
+    pFactory->Release();
   }
+  #elif (!defined(__APPLE__) && !defined(__MACH__))
+  #if defined(CREATE_CONTEXT)
+  if (!create_context()) return "";
+  #endif
+  #if defined(__sun)
+  char buf[1024];
+  FILE *fp = popen("prtconf |  awk '/display/{p=3} p > 0 {print $0; p--}'| awk -F'pci' 'NR==3{print $0}' | sed 's/.*pci//g' | awk -F' ' '{print $1}' | awk -F',' '{print $1}'", "r");
+  if (fp) {
+    if (fgets(buf, sizeof(buf), fp)) {
+      buf[strlen(buf) - 1] = '\0';
+      if (strlen(buf)) {
+        unsigned int Id = 0;
+        std::istringstream converter(buf);
+        converter >> std::hex >> Id;
+        result = strlen(buf) ? GetVendorOrDeviceNameById(Id, 0) : "";
+      }
+    }
+    pclose(fp);
+  }
+  if (!result.empty()) {
+    return result;
+  }
+  #endif
+  unsigned int v = 0;
+  PFNGLXQUERYCURRENTRENDERERINTEGERMESAPROC queryInteger;
+  queryInteger = (PFNGLXQUERYCURRENTRENDERERINTEGERMESAPROC)glXGetProcAddressARB((const GLubyte *)"glXQueryCurrentRendererIntegerMESA");
+  queryInteger(GLX_RENDERER_VENDOR_ID_MESA, &v);
+  result = v ? GetVendorOrDeviceNameById(v, 0) : "";
+  if (result.empty()) {
+    PFNGLXQUERYCURRENTRENDERERSTRINGMESAPROC queryString;
+    queryString = (PFNGLXQUERYCURRENTRENDERERSTRINGMESAPROC)glXGetProcAddressARB((const GLubyte *)"glXQueryCurrentRendererStringMESA");
+    result = queryString(GLX_RENDERER_VENDOR_ID_MESA);
+  }
+  #else
+  char buf[1024];
+  FILE *fp = popen("ioreg -bls | grep -n2 '    | |   | |   \"model\" = <\"' | awk -F',\"pci' 'NR==5{print $2}' | rev | cut -c 2- | rev | awk -F',' '{print $1}'", "r");
+  if (fp) {
+    if (fgets(buf, sizeof(buf), fp)) {
+      buf[strlen(buf) - 1] = '\0';
+      if (strlen(buf)) {
+        unsigned int Id = 0;
+        std::istringstream converter(buf);
+        converter >> std::hex >> Id;
+        result = strlen(buf) ? GetVendorOrDeviceNameById(Id, 0) : "";
+      }
+    }
+    pclose(fp);
+  }
+  if (result.empty()) {
+    char buf[1024];
+    FILE *fp = popen("system_profiler SPDisplaysDataType | grep -i 'Vendor: ' | uniq | awk -F 'Vendor: ' 'NR==1{$1=$1;print}' | awk 'NR==1{$1=$1;print}'", "r");
+    if (fp) {
+      if (fgets(buf, sizeof(buf), fp)) {
+        buf[strlen(buf) - 1] = '\0';
+        result = buf;
+      }
+      pclose(fp);
+    }
+  }
+  #endif
+  gpuvendor = result;
+  return result;
+}
 
-  std::string narrow(std::wstring wstr) {
-    if (wstr.empty()) return "";
+static std::string gpurenderer;
+std::string gpu_renderer() {
+  if (!gpurenderer.empty()) return gpurenderer;
+  std::string result;
+  #if defined(_WIN32)
+  auto narrow = [](std::wstring wstr) {
+    if (wstr.empty()) return std::string("");
     int nbytes = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), (int)wstr.length(), nullptr, 0, nullptr, nullptr);
     std::vector<char> buf(nbytes);
     return std::string { buf.data(), (std::size_t)WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), (int)wstr.length(), buf.data(), nbytes, nullptr, nullptr) };
-  }
-
-  HANDLE open_process_with_debug_privilege(ngs::ps::NGS_PROCID proc_id) {
-    HANDLE proc = nullptr;
-    HANDLE hToken = nullptr;
-    LUID luid;
-    TOKEN_PRIVILEGES tkp;
-    if (OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken)) {
-      if (LookupPrivilegeValue(nullptr, SE_DEBUG_NAME, &luid)) {
-        tkp.PrivilegeCount = 1;
-        tkp.Privileges[0].Luid = luid;
-        tkp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
-        if (AdjustTokenPrivileges(hToken, false, &tkp, sizeof(tkp), nullptr, nullptr)) {
-          proc = OpenProcess(PROCESS_ALL_ACCESS, false, proc_id);
-        }
-      }
-      CloseHandle(hToken);
-    }
-    if (!proc) {
-      proc = OpenProcess(PROCESS_ALL_ACCESS, false, proc_id);
-    }
-    return proc;
-  }
-
-  std::vector<wchar_t> cwd_cmd_env_from_proc(HANDLE proc, int type) {
-    std::vector<wchar_t> buffer;
-    PEB peb;
-    SIZE_T nRead = 0;
-    ULONG len = 0;
-    PROCESS_BASIC_INFORMATION pbi;
-    RTL_USER_PROCESS_PARAMETERS upp;
-    NTSTATUS status = NtQueryInformationProcess(proc, ProcessBasicInformation, &pbi, sizeof(pbi), &len);
-    ULONG error = RtlNtStatusToDosError(status);
-    if (error) return buffer;
-    ReadProcessMemory(proc, pbi.PebBaseAddress, &peb, sizeof(peb), &nRead);
-    if (!nRead) return buffer;
-    ReadProcessMemory(proc, peb.ProcessParameters, &upp, sizeof(upp), &nRead);
-    if (!nRead) return buffer;
-    PVOID buf = nullptr; len = 0;
-    if (type == MEMCWD) {
-      buf = upp.CurrentDirectory.DosPath.Buffer;
-      len = upp.CurrentDirectory.DosPath.Length;
-    } else if (type == MEMENV) {
-      buf = upp.Environment;
-      len = (ULONG)upp.EnvironmentSize;
-    } else if (type == MEMCMD) {
-      buf = upp.CommandLine.Buffer;
-      len = upp.CommandLine.Length;
-    }
-    buffer.resize(len / 2 + 1);
-    ReadProcessMemory(proc, buf, &buffer[0], len, &nRead);
-    if (!nRead) return buffer;
-    buffer[len / 2] = L'\0';
-    return buffer;
-  }
-  #endif
-
-  #if (defined(__APPLE__) && defined(__MACH__))
-  enum MEMTYP {
-    MEMCMD,
-    MEMENV
   };
-
-  std::vector<std::string> cmd_env_from_proc_id(ngs::ps::NGS_PROCID proc_id, int type) {
-    std::vector<std::string> vec;
-    std::size_t len = 0;
-    int argmax = 0, nargs = 0;
-    char *procargs = nullptr, *sp = nullptr, *cp = nullptr;
-    int mib[3];
-    mib[0] = CTL_KERN;
-    mib[1] = KERN_ARGMAX;
-    len = sizeof(argmax);
-    if (sysctl(mib, 2, &argmax, &len, nullptr, 0)) {
-      return vec;
-    }
-    procargs = (char *)malloc(argmax);
-    if (!procargs) {
-      return vec;
-    }
-    mib[0] = CTL_KERN;
-    mib[1] = KERN_PROCARGS2;
-    mib[2] = proc_id;
-    len = argmax;
-    if (sysctl(mib, 3, procargs, &len, nullptr, 0)) {
-      free(procargs);
-      return vec;
-    }
-    memcpy(&nargs, procargs, sizeof(nargs));
-    cp = procargs + sizeof(nargs);
-    for (; cp < &procargs[len]; cp++) {
-      if (*cp == '\0') break;
-    }
-    if (cp == &procargs[len]) {
-      free(procargs);
-      return vec;
-    }
-    for (; cp < &procargs[len]; cp++) {
-      if (*cp != '\0') break;
-    }
-    if (cp == &procargs[len]) {
-      free(procargs);
-      return vec;
-    }
-    sp = cp;
-    int i = 0;
-    while ((*sp != '\0' || i < nargs) && sp < &procargs[len]) {
-      if (type && i >= nargs) {
-        vec.push_back(sp);
-      } else if (!type && i < nargs) {
-        vec.push_back(sp);
+  IDXGIFactory *pFactory = nullptr;
+  if (CreateDXGIFactory(__uuidof(IDXGIFactory), (void **)&pFactory) == S_OK) {
+    IDXGIAdapter *pAdapter = nullptr;
+    if (pFactory->EnumAdapters(0, &pAdapter) == S_OK) {
+      DXGI_ADAPTER_DESC adapterDesc;
+      if (pAdapter->GetDesc(&adapterDesc) == S_OK) {
+        result = GetVendorOrDeviceNameById(adapterDesc.DeviceId, 1);
+        if (result.empty()) {
+          result = narrow(adapterDesc.Description);
+        }
       }
-      sp += strlen(sp) + 1;
-      i++;
+      pAdapter->Release();
     }
-    free(procargs);
-    return vec;
+    pFactory->Release();
   }
-  #elif defined(__FreeBSD__)
-  kinfo_file *kinfo_file_from_proc_id(ngs::ps::NGS_PROCID proc_id, int *cntp) {
-    *cntp = 0;
-    int cnt = 0;
-    std::size_t len = 0;
-    char *buf = nullptr, *bp = nullptr, *eb = nullptr;
-    kinfo_file *kif = nullptr, *kp = nullptr, *kf = nullptr;
-    int mib[4];
-    mib[0] = CTL_KERN;
-    mib[1] = KERN_PROC;
-    mib[2] = KERN_PROC_FILEDESC;
-    mib[3] = proc_id;
-    if (sysctl(mib, 4, nullptr, &len, nullptr, 0)) {
-      return nullptr;
+  #elif (!defined(__APPLE__) && !defined(__MACH__))
+  #if defined(CREATE_CONTEXT)
+  if (!create_context()) return "";
+  #endif
+  #if defined(__sun)
+  char buf[1024];
+  FILE *fp = popen("prtconf | awk '/display/{p=3} p > 0 {print $0; p--}' | awk -F'pci' 'NR==3{print $0}' | sed 's/.*pci//g' | awk -F' ' '{print $1}' | awk -F',' '{print $2}'", "r");
+  if (fp) {
+    if (fgets(buf, sizeof(buf), fp)) {
+      buf[strlen(buf) - 1] = '\0';
+      if (strlen(buf)) {
+        unsigned int Id = 0;
+        std::istringstream converter(buf);
+        converter >> std::hex >> Id;
+        result = strlen(buf) ? GetVendorOrDeviceNameById(Id, 1) : "";
+      }
     }
-    len = len * 4 / 3;
-    buf = (char *)malloc(len);
-    if (!buf) {
-      return nullptr;
-    }
-    if (sysctl(mib, 4, buf, &len, nullptr, 0)) {
-      free(buf);
-      return nullptr;
-    }
-    bp = buf;
-    eb = buf + len;
-    while (bp < eb) {
-      kf = (kinfo_file *)(std::uintptr_t)bp;
-      if (!kf->kf_structsize) break;
-      bp += kf->kf_structsize;
-      cnt++;
-    }
-    kif = (kinfo_file *)calloc(cnt, sizeof(*kif));
-    if (!kif) {
-      free(buf);
-      return nullptr;
-    }
-    bp = buf;
-    eb = buf + len;
-    kp = kif;
-    while (bp < eb) {
-      kf = (kinfo_file *)(std::uintptr_t)bp;
-      if (!kf->kf_structsize) break;
-      memcpy(kp, kf, kf->kf_structsize);
-      bp += kf->kf_structsize;
-      kp->kf_structsize = sizeof(*kp);
-      kp++;
-    }
-    free(buf);
-    *cntp = cnt;
-    return kif;
+    pclose(fp);
+  }
+  if (!result.empty()) {
+    return result;
   }
   #endif
-
-} // anonymous namespace
-
-namespace ngs::ps {
-
-  NGS_PROCID proc_id_from_self() {
-    #if !defined(_WIN32)
-    return getpid();
-    #else
-    return GetCurrentProcessId();
-    #endif
+  unsigned int v = 0;
+  PFNGLXQUERYCURRENTRENDERERINTEGERMESAPROC queryInteger;
+  queryInteger = (PFNGLXQUERYCURRENTRENDERERINTEGERMESAPROC)glXGetProcAddressARB((const GLubyte *)"glXQueryCurrentRendererIntegerMESA");
+  queryInteger(GLX_RENDERER_DEVICE_ID_MESA, &v);
+  result = v ? GetVendorOrDeviceNameById(v, 1) : "";
+  if (result.empty()) {
+    PFNGLXQUERYCURRENTRENDERERSTRINGMESAPROC queryString;
+    queryString = (PFNGLXQUERYCURRENTRENDERERSTRINGMESAPROC)glXGetProcAddressARB((const GLubyte *)"glXQueryCurrentRendererStringMESA");
+    result = queryString(GLX_RENDERER_DEVICE_ID_MESA);
   }
-
-  std::vector<NGS_PROCID> proc_id_enum() {
-    std::vector<NGS_PROCID> vec;
-    #if defined(_WIN32)
-    HANDLE hp = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (!hp) return vec;
-    PROCESSENTRY32 pe;
-    pe.dwSize = sizeof(PROCESSENTRY32);
-    if (Process32First(hp, &pe)) {
-      do {
-        message_pump();
-        vec.push_back(pe.th32ProcessID);
-      } while (Process32Next(hp, &pe));
-    }
-    CloseHandle(hp);
-    #elif (defined(__APPLE__) && defined(__MACH__))
-    vec.push_back(0);
-    std::vector<NGS_PROCID> proc_info;
-    proc_info.resize(proc_listpids(PROC_ALL_PIDS, 0, nullptr, 0));
-    int cntp = proc_listpids(PROC_ALL_PIDS, 0, &proc_info[0], sizeof(NGS_PROCID) * proc_info.size());
-    for (int i = cntp - 1; i >= 0; i--) {
-      if (proc_info[i] <= 0) continue;
-      vec.push_back(proc_info[i]);
-    }
-    #elif (defined(__linux__) || defined(__ANDROID__))
-    vec.push_back(0);
-    DIR *proc = opendir("/proc");
-    struct dirent *ent = nullptr;
-    NGS_PROCID tgid = 0;
-    if (proc == nullptr) return vec;
-    while ((ent = readdir(proc))) {
-      if (!isdigit(*ent->d_name))
-        continue;
-      tgid = strtoul(ent->d_name, nullptr, 10);
-      vec.push_back(tgid);
-    }
-    closedir(proc);
-    #elif defined(__FreeBSD__)
-    int cntp = 0;
-    kvm_t *kd = nullptr;
-    kinfo_proc *proc_info = nullptr;
-    const char *nlistf = "/dev/null";
-    const char *memf   = "/dev/null";
-    kd = kvm_openfiles(nlistf, memf, nullptr, O_RDONLY, nullptr);
-    if (!kd) return vec;
-    if ((proc_info = kvm_getprocs(kd, KERN_PROC_PROC, 0, &cntp))) {
-      for (int i = 0; i < cntp; i++) {
-        vec.push_back(proc_info[i].ki_pid);
+  #else
+  char buf[1024];
+  FILE *fp = popen("ioreg -bls | grep -n2 '    | |   | |   \"model\" = <\"' | awk -F',\"pci' 'NR==5{print $2}' | rev | cut -c 2- | rev | awk -F',' '{print $2}'", "r");
+  if (fp) {
+    if (fgets(buf, sizeof(buf), fp)) {
+      buf[strlen(buf) - 1] = '\0';
+      if (strlen(buf)) {
+        unsigned int Id = 0;
+        std::istringstream converter(buf);
+        converter >> std::hex >> Id;
+        result = strlen(buf) ? GetVendorOrDeviceNameById(Id, 1) : "";
       }
     }
-    kvm_close(kd);
-    #elif defined(__DragonFly__)
-    int cntp = 0;
-    kvm_t *kd = nullptr;
-    kinfo_proc *proc_info = nullptr;
-    const char *nlistf = "/dev/null";
-    const char *memf   = "/dev/null";
-    kd = kvm_openfiles(nlistf, memf, nullptr, O_RDONLY, nullptr);
-    if (!kd) return vec;
-    if ((proc_info = kvm_getprocs(kd, KERN_PROC_ALL, 0, &cntp))) {
-      for (int i = 0; i < cntp; i++) {
-        if (proc_info[i].kp_pid >= 0) {
-          vec.push_back(proc_info[i].kp_pid);
-        }
-      }
-    }
-    kvm_close(kd);
-    #elif defined(__NetBSD__)
-    int cntp = 0;
-    kvm_t *kd = nullptr;
-    kinfo_proc2 *proc_info = nullptr;
-    kd = kvm_openfiles(nullptr, nullptr, nullptr, KVM_NO_FILES, nullptr);
-    if (!kd) return vec;
-    if ((proc_info = kvm_getproc2(kd, KERN_PROC_ALL, 0, sizeof(struct kinfo_proc2), &cntp))) {
-      for (int i = cntp - 1; i >= 0; i--) {
-        vec.push_back(proc_info[i].p_pid);
-      }
-    }
-    kvm_close(kd);
-    #elif defined(__OpenBSD__)
-    vec.push_back(0);
-    int cntp = 0;
-    kvm_t *kd = nullptr;
-    kinfo_proc *proc_info = nullptr;
-    kd = kvm_openfiles(nullptr, nullptr, nullptr, KVM_NO_FILES, nullptr);
-    if (!kd) return vec;
-    if ((proc_info = kvm_getprocs(kd, KERN_PROC_ALL, 0, sizeof(struct kinfo_proc), &cntp))) {
-      for (int i = cntp - 1; i >= 0; i--) {
-        vec.push_back(proc_info[i].p_pid);
-      }
-    }
-    kvm_close(kd);
-    #elif defined(__sun)
-    struct pid cur_pid;
-    kvm_t *kd = nullptr;
-    proc *proc_info = nullptr;
-    kd = kvm_open(nullptr, nullptr, nullptr, O_RDONLY, nullptr);
-    if (!kd) return vec;
-    while ((proc_info = kvm_nextproc(kd))) {
-      if (kvm_kread(kd, (std::uintptr_t)proc_info->p_pidp, &cur_pid, sizeof(cur_pid)) != -1) {
-        vec.insert(vec.begin(), cur_pid.pid_id);
-      }
-    }
-    kvm_close(kd);
-    #endif
-    std::sort(vec.begin(), vec.end());
-    return vec;
+    pclose(fp);
   }
-
-  bool proc_id_exists(NGS_PROCID proc_id) {
-    if (proc_id < 0) return false;
-    std::vector<NGS_PROCID> vec;
-    vec = proc_id_enum();
-    auto itr = std::find(vec.begin(), vec.end(), proc_id);
-    return (itr != vec.end());
-  }
-
-  bool proc_id_suspend(NGS_PROCID proc_id) {
-    if (proc_id < 0) return false;
-    #if !defined(_WIN32)
-    return (!kill(proc_id, SIGSTOP));
-    #else
-    HANDLE proc = open_process_with_debug_privilege(proc_id);
-    if (proc == nullptr) return false;
-    typedef NTSTATUS (__stdcall *NTSP)(IN HANDLE ProcessHandle);
-    HMODULE hModule = GetModuleHandleW(L"ntdll.dll");
-    if (!hModule) return false;
-    FARPROC farProc = GetProcAddress(hModule, "NtSuspendProcess");
-    if (!farProc) return false;
-    NTSP NtSuspendProcess = (NTSP)farProc;
-    NTSTATUS status = NtSuspendProcess(proc);
-    ULONG error = RtlNtStatusToDosError(status);
-    CloseHandle(proc);
-    return (!error);
-    #endif
-  }
-
-  bool proc_id_resume(NGS_PROCID proc_id) {
-    if (proc_id < 0) return false;
-    #if !defined(_WIN32)
-    return (!kill(proc_id, SIGCONT));
-    #else
-    HANDLE proc = open_process_with_debug_privilege(proc_id);
-    if (proc == nullptr) return false;
-    typedef NTSTATUS (__stdcall *NTRP)(IN HANDLE ProcessHandle);
-    HMODULE hModule = GetModuleHandleW(L"ntdll.dll");
-    if (!hModule) return false;
-    FARPROC farProc = GetProcAddress(hModule, "NtResumeProcess");
-    if (!farProc) return false;
-    NTRP NtResumeProcess = (NTRP)farProc;
-    NTSTATUS status = NtResumeProcess(proc);
-    ULONG error = RtlNtStatusToDosError(status);
-    CloseHandle(proc);
-    return (!error);
-    #endif
-  }
-
-  bool proc_id_kill(NGS_PROCID proc_id) {
-    if (proc_id < 0) return false;
-    #if !defined(_WIN32)
-    return (!kill(proc_id, SIGKILL));
-    #else
-    HANDLE proc = open_process_with_debug_privilege(proc_id);
-    if (proc == nullptr) return false;
-    bool result = TerminateProcess(proc, 0);
-    CloseHandle(proc);
-    return result;
-    #endif
-  }
-
-  std::vector<NGS_PROCID> parent_proc_id_from_proc_id(NGS_PROCID proc_id) {
-    std::vector<NGS_PROCID> vec;
-    if (proc_id < 0) return vec;
-    #if defined(_WIN32)
-    HANDLE hp = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (!hp) return vec;
-    PROCESSENTRY32 pe;
-    pe.dwSize = sizeof(PROCESSENTRY32);
-    if (Process32First(hp, &pe)) {
-      do {
-        if (pe.th32ProcessID == proc_id) {
-          message_pump();
-          vec.push_back(pe.th32ParentProcessID);
-          break;
-        }
-      } while (Process32Next(hp, &pe));
-    }
-    CloseHandle(hp);
-    #elif (defined(__APPLE__) && defined(__MACH__))
-    proc_bsdinfo proc_info;
-    if (proc_pidinfo(proc_id, PROC_PIDTBSDINFO, 0, &proc_info, sizeof(proc_info)) > 0) {
-      vec.push_back(proc_info.pbi_ppid);
-    }
-    if (vec.empty() && (proc_id == 0 || proc_id == 1))
-      vec.push_back(0);
-    #elif (defined(__linux__) || defined(__ANDROID__))
-    char buffer[BUFSIZ];
-    sprintf(buffer, "/proc/%d/stat", proc_id);
-    FILE *stat = fopen(buffer, "r");
-    if (stat) {
-      std::size_t size = fread(buffer, sizeof(char), sizeof(buffer), stat);
-      if (size > 0) {
-        char *token = nullptr;
-        if (((token = strtok(buffer, " "))) &&
-          ((token = strtok(nullptr, " "))) &&
-          ((token = strtok(nullptr, " "))) &&
-          ((token = strtok(nullptr, " ")))) {
-          NGS_PROCID parent_proc_id = strtoul(token, nullptr, 10);
-          vec.push_back(parent_proc_id);
-        }
-      }
-      fclose(stat);
-    }
-    if (vec.empty() && proc_id == 0)
-      vec.push_back(0);
-    #elif defined(__FreeBSD__)
-    int cntp = 0;
-    kvm_t *kd = nullptr;
-    kinfo_proc *proc_info = nullptr;
-    const char *nlistf = "/dev/null";
-    const char *memf   = "/dev/null";
-    kd = kvm_openfiles(nlistf, memf, nullptr, O_RDONLY, nullptr);
-    if (!kd) return vec;
-    if ((proc_info = kvm_getprocs(kd, KERN_PROC_PID, proc_id, &cntp))) {
-      vec.push_back(proc_info->ki_ppid);
-    }
-    kvm_close(kd);
-    #elif defined(__DragonFly__)
-    int cntp = 0;
-    kvm_t *kd = nullptr;
-    kinfo_proc *proc_info = nullptr;
-    const char *nlistf = "/dev/null";
-    const char *memf   = "/dev/null";
-    kd = kvm_openfiles(nlistf, memf, nullptr, O_RDONLY, nullptr);
-    if (!kd) return vec;
-    if ((proc_info = kvm_getprocs(kd, KERN_PROC_PID, proc_id, &cntp))) {
-      if (proc_info->kp_ppid >= 0) {
-        vec.push_back(proc_info->kp_ppid);
-      }
-    }
-    kvm_close(kd);
-    if (vec.empty() && proc_id == 0)
-      vec.push_back(0);
-    #elif defined(__NetBSD__)
-    int cntp = 0;
-    kvm_t *kd = nullptr;
-    kinfo_proc2 *proc_info = nullptr;
-    kd = kvm_openfiles(nullptr, nullptr, nullptr, KVM_NO_FILES, nullptr);
-    if (!kd) return vec;
-    if ((proc_info = kvm_getproc2(kd, KERN_PROC_PID, proc_id, sizeof(struct kinfo_proc2), &cntp))) {
-      vec.push_back(proc_info->p_ppid);
-    }
-    kvm_close(kd);
-    #elif defined(__OpenBSD__)
-    int cntp = 0;
-    kvm_t *kd = nullptr;
-    kinfo_proc *proc_info = nullptr;
-    kd = kvm_openfiles(nullptr, nullptr, nullptr, KVM_NO_FILES, nullptr);
-    if (!kd) return vec;
-    if ((proc_info = kvm_getprocs(kd, KERN_PROC_PID, proc_id, sizeof(struct kinfo_proc), &cntp))) {
-      vec.push_back(proc_info->p_ppid);
-    }
-    kvm_close(kd);
-    if (vec.empty() && proc_id == 0)
-      vec.push_back(0);
-    #elif defined(__sun)
-    kvm_t *kd = nullptr;
-    proc *proc_info = nullptr;
-    kd = kvm_open(nullptr, nullptr, nullptr, O_RDONLY, nullptr);
-    if (!kd) return vec;
-    if ((proc_info = kvm_getproc(kd, proc_id))) {
-      vec.push_back(proc_info->p_ppid);
-    }
-    kvm_close(kd);
-    #endif
-    return vec;
-  }
-
-  std::vector<NGS_PROCID> proc_id_from_parent_proc_id(NGS_PROCID parent_proc_id) {
-    std::vector<NGS_PROCID> vec;
-    if (parent_proc_id < 0) return vec;
-    #if defined(_WIN32)
-    HANDLE hp = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (!hp) return vec;
-    PROCESSENTRY32 pe;
-    pe.dwSize = sizeof(PROCESSENTRY32);
-    if (Process32First(hp, &pe)) {
-      do {
-        message_pump();
-        if (pe.th32ParentProcessID == parent_proc_id) {
-          vec.push_back(pe.th32ProcessID);
-        }
-      } while (Process32Next(hp, &pe));
-    }
-    CloseHandle(hp);
-    #elif (defined(__APPLE__) && defined(__MACH__))
-    std::vector<NGS_PROCID> proc_info;
-    proc_info.resize(proc_listpids(PROC_PPID_ONLY, (uint32_t)parent_proc_id, nullptr, 0));
-    int cntp = proc_listpids(PROC_PPID_ONLY, (uint32_t)parent_proc_id, &proc_info[0], sizeof(NGS_PROCID) * proc_info.size());
-    for (int i = cntp - 1; i >= 0; i--) {
-      if (proc_info[i] <= 0) continue;
-      if (proc_info[i] == 1 && parent_proc_id == 0) {
-        vec.push_back(0);
-      }
-      vec.push_back(proc_info[i]);
-    }
-    #elif (defined(__linux__) || defined(__ANDROID__))
-    std::vector<NGS_PROCID> proc_id = proc_id_enum();
-    for (std::size_t i = 0; i < proc_id.size(); i++) {
-      std::vector<NGS_PROCID> ppid = parent_proc_id_from_proc_id(proc_id[i]);
-      if (!ppid.empty() && ppid[0] == parent_proc_id) {
-        vec.push_back(proc_id[i]);
-      }
-    }
-    #elif defined(__FreeBSD__)
-    int cntp = 0;
-    kvm_t *kd = nullptr;
-    kinfo_proc *proc_info = nullptr;
-    const char *nlistf = "/dev/null";
-    const char *memf   = "/dev/null";
-    kd = kvm_openfiles(nlistf, memf, nullptr, O_RDONLY, nullptr);
-    if (!kd) return vec;
-    if ((proc_info = kvm_getprocs(kd, KERN_PROC_PROC, 0, &cntp))) {
-      for (int i = 0; i < cntp; i++) {
-        if (proc_info[i].ki_ppid == parent_proc_id) {
-          vec.push_back(proc_info[i].ki_pid);
-        }
-      }
-    }
-    kvm_close(kd);
-    #elif defined(__DragonFly__)
-    int cntp = 0;
-    kvm_t *kd = nullptr;
-    kinfo_proc *proc_info = nullptr;
-    const char *nlistf = "/dev/null";
-    const char *memf   = "/dev/null";
-    kd = kvm_openfiles(nlistf, memf, nullptr, O_RDONLY, nullptr);
-    if (!kd) return vec;
-    if ((proc_info = kvm_getprocs(kd, KERN_PROC_ALL, 0, &cntp))) {
-      for (int i = 0; i < cntp; i++) {
-        if (proc_info[i].kp_pid == 1 && proc_info[i].kp_ppid == 0 && parent_proc_id == 0) {
-          vec.push_back(0);
-        }
-        if (proc_info[i].kp_pid >= 0 && proc_info[i].kp_ppid >= 0 && proc_info[i].kp_ppid == parent_proc_id) {
-          vec.push_back(proc_info[i].kp_pid);
-        }
-      }
-    }
-    kvm_close(kd);
-    #elif defined(__NetBSD__)
-    int cntp = 0;
-    kvm_t *kd = nullptr;
-    kinfo_proc2 *proc_info = nullptr;
-    kd = kvm_openfiles(nullptr, nullptr, nullptr, KVM_NO_FILES, nullptr);
-    if (!kd) return vec;
-    if ((proc_info = kvm_getproc2(kd, KERN_PROC_ALL, 0, sizeof(struct kinfo_proc2), &cntp))) {
-      for (int i = cntp - 1; i >= 0; i--) {
-        if (proc_info[i].p_ppid == parent_proc_id) {
-          vec.push_back(proc_info[i].p_pid);
-        }
-      }
-    }
-    kvm_close(kd);
-    #elif defined(__OpenBSD__)
-    int cntp = 0;
-    kvm_t *kd = nullptr;
-    kinfo_proc *proc_info = nullptr;
-    kd = kvm_openfiles(nullptr, nullptr, nullptr, KVM_NO_FILES, nullptr);
-    if (!kd) return vec;
-    if ((proc_info = kvm_getprocs(kd, KERN_PROC_ALL, 0, sizeof(struct kinfo_proc), &cntp))) {
-      for (int i = cntp - 1; i >= 0; i--) {
-        if (proc_info[i].p_pid == 1 && proc_info[i].p_ppid == 0 && parent_proc_id == 0) {
-          vec.push_back(0);
-        }
-        if (proc_info[i].p_ppid == parent_proc_id) {
-          vec.push_back(proc_info[i].p_pid);
-        }
-      }
-    }
-    kvm_close(kd);
-    #elif defined(__sun)
-    struct pid cur_pid;
-    kvm_t *kd = nullptr;
-    proc *proc_info = nullptr;
-    kd = kvm_open(nullptr, nullptr, nullptr, O_RDONLY, nullptr);
-    if (!kd) return vec;
-    while ((proc_info = kvm_nextproc(kd))) {
-      if (proc_info->p_ppid == parent_proc_id) {
-        if (kvm_kread(kd, (std::uintptr_t)proc_info->p_pidp, &cur_pid, sizeof(cur_pid)) != -1) {
-          vec.insert(vec.begin(), cur_pid.pid_id);
-        }
-      }
-    }
-    kvm_close(kd);
-    #endif
-    std::sort(vec.begin(), vec.end());
-    return vec;
-  }
-
-  std::vector<NGS_PROCID> proc_id_from_exe(std::string exe) {
-    std::vector<NGS_PROCID> vec;
-    if (exe.empty()) return vec;
-    auto fnamecmp = [](std::string fname1, std::string fname2) {
-      #if defined(_WIN32)
-      std::transform(fname1.begin(), fname1.end(), fname1.begin(), ::toupper);
-      std::transform(fname2.begin(), fname2.end(), fname2.begin(), ::toupper);
-      std::size_t fp = fname2.find_last_of("\\/");
-      bool abspath = (!fname1.empty() && fname1.length() >= 3 && fname1[1] == ':' &&
-        (fname1[2] == '\\' || fname1[2] == '/'));
-      #else
-      std::size_t fp = fname2.find_last_of("/");
-      bool abspath = (!fname1.empty() && fname1.length() >= 1 && fname1[0] == '/');
-      #endif
-      if (fname1.empty() || fname2.empty() || fp == std::string::npos) return false;
-      #if defined(_WIN32)
-      if (abspath && fname1.length() == 3) return (fname1 == fname2.substr(0, fp + 1));
-      #else
-      if (abspath && fname1.length() == 1) return (fname1 == fname2.substr(0, fp + 1));
-      #endif
-      if (abspath) return (fname1 == fname2 || fname1 == fname2.substr(0, fp));
-      return (fname1 == fname2.substr(fp + 1));
-    };
-    std::vector<NGS_PROCID> proc_id = proc_id_enum();
-    for (std::size_t i = 0; i < proc_id.size(); i++) {
-      if (fnamecmp(exe, exe_from_proc_id(proc_id[i]))) {
-        vec.push_back(proc_id[i]);
-      }
-    }
-    return vec;
-  }
-
-  std::vector<NGS_PROCID> proc_id_from_cwd(std::string cwd) {
-    std::vector<NGS_PROCID> vec;
-    if (cwd.empty()) return vec;
-    auto fnamecmp = [](std::string fname1, std::string fname2) {
-      #if defined(_WIN32)
-      std::transform(fname1.begin(), fname1.end(), fname1.begin(), ::toupper);
-      std::transform(fname2.begin(), fname2.end(), fname2.begin(), ::toupper);
-      #endif
-      if (fname1.empty() || fname2.empty()) return false;
-      return (fname1 == fname2);
-    };
-    std::vector<NGS_PROCID> proc_id = proc_id_enum();
-    for (std::size_t i = 0; i < proc_id.size(); i++) {
-      if (fnamecmp(cwd, cwd_from_proc_id(proc_id[i]))) {
-        vec.push_back(proc_id[i]);
-      }
-    }
-    return vec;
-  }
-
-  std::string exe_from_proc_id(NGS_PROCID proc_id) {
-    std::string path;
-    if (proc_id < 0) return path;
-    #if defined(_WIN32)
-    if (proc_id == GetCurrentProcessId()) {
-      wchar_t buffer[MAX_PATH];
-      if (GetModuleFileNameW(nullptr, buffer, sizeof(buffer))) {
-        wchar_t exe[MAX_PATH];
-        if (_wfullpath(exe, buffer, MAX_PATH)) {
-          path = narrow(exe);
-        }
-      }
-    } else {
-      HANDLE proc = open_process_with_debug_privilege(proc_id);
-      if (proc == nullptr) return path;
-      wchar_t buffer[MAX_PATH];
-      DWORD size = sizeof(buffer);
-      if (QueryFullProcessImageNameW(proc, 0, buffer, &size)) {
-        wchar_t exe[MAX_PATH];
-        if (_wfullpath(exe, buffer, MAX_PATH)) {
-          path = narrow(exe);
-        }
-      }
-      CloseHandle(proc);
-    }
-    #elif (defined(__APPLE__) && defined(__MACH__))
-    char exe[PROC_PIDPATHINFO_MAXSIZE];
-    if (proc_pidpath(proc_id, exe, sizeof(exe)) > 0) {
-      char buffer[PATH_MAX];
-      if (realpath(exe, buffer)) {
-        path = buffer;
-      }
-    }
-    #elif (defined(__linux__) || defined(__ANDROID__))
-    char exe[PATH_MAX];
-    if (realpath(("/proc/" + std::to_string(proc_id) + "/exe").c_str(), exe)) {
-      path = exe;
-    }
-    #elif (defined(__FreeBSD__) || defined(__DragonFly__))
-    int mib[4];
-    std::size_t len = 0;
-    mib[0] = CTL_KERN;
-    mib[1] = KERN_PROC;
-    mib[2] = KERN_PROC_PATHNAME;
-    mib[3] = proc_id;
-    if (!sysctl(mib, 4, nullptr, &len, nullptr, 0)) {
-      std::vector<char> vecbuff;
-      vecbuff.resize(len);
-      char *exe = &vecbuff[0];
-      if (!sysctl(mib, 4, exe, &len, nullptr, 0)) {
-        char buffer[PATH_MAX];
-        if (realpath(exe, buffer)) {
-          path = buffer;
-        }
-      }
-    }
-    #elif defined(__NetBSD__)
-    int mib[4];
-    std::size_t len = 0;
-    mib[0] = CTL_KERN;
-    mib[1] = KERN_PROC_ARGS;
-    mib[2] = proc_id;
-    mib[3] = KERN_PROC_PATHNAME;
-    if (!sysctl(mib, 4, nullptr, &len, nullptr, 0)) {
-      std::vector<char> vecbuff;
-      vecbuff.resize(len);
-      char *exe = &vecbuff[0];
-      if (!sysctl(mib, 4, exe, &len, nullptr, 0)) {
-        char buffer[PATH_MAX];
-        if (realpath(exe, buffer)) {
-          path = buffer;
-        }
-      }
-    }
-    #elif defined(__OpenBSD__)
-    auto is_exe = [](NGS_PROCID proc_id, std::string exe) {
-      int cntp = 0;
-      std::string res;
-      kvm_t *kd = nullptr;
-      kinfo_file *kif = nullptr;
-      bool error = false;
-      kd = kvm_openfiles(nullptr, nullptr, nullptr, KVM_NO_FILES, nullptr);
-      if (!kd) return res;
-      if ((kif = kvm_getfiles(kd, KERN_FILE_BYPID, proc_id, sizeof(struct kinfo_file), &cntp))) {
-        for (int i = 0; i < cntp && kif[i].fd_fd < 0; i++) {
-          if (kif[i].fd_fd == KERN_FILE_TEXT) {
-            struct stat st;
-            fallback:
-            char buffer[PATH_MAX];
-            if (!stat(exe.c_str(), &st) && (st.st_mode & S_IXUSR) &&
-              (st.st_mode & S_IFREG) && realpath(exe.c_str(), buffer) &&
-              st.st_dev == (dev_t)kif[i].va_fsid && st.st_ino == (ino_t)kif[i].va_fileid) {
-              res = buffer;
-            }
-            if (res.empty() && !error) {
-              error = true;
-              std::size_t last_slash_pos = exe.find_last_of("/");
-              if (last_slash_pos != std::string::npos) {
-                exe = exe.substr(0, last_slash_pos + 1) + kif[i].p_comm;
-                goto fallback;
-              }
-            }
-            break;
-          }
-        }
-      }
-      kvm_close(kd);
-      return res;
-    };
-    bool error = false, retried = false;
-    std::vector<std::string> buffer = cmdline_from_proc_id(proc_id);
-    if (!buffer.empty()) {
-      std::string argv0;
-      if (!buffer[0].empty()) {
-        fallback:
-        std::size_t slash_pos = buffer[0].find('/');
-        std::size_t colon_pos = buffer[0].find(':');
-        if (slash_pos == 0) {
-          argv0 = buffer[0];
-          path = is_exe(proc_id, argv0);
-        } else if (slash_pos == std::string::npos || slash_pos > colon_pos) { 
-          std::string penv = envvar_value_from_proc_id(proc_id, "PATH");
-          if (!penv.empty()) {
-            retry:
-            std::string tmp;
-            std::stringstream sstr(penv);
-            while (std::getline(sstr, tmp, ':')) {
-              argv0 = tmp + "/" + buffer[0];
-              path = is_exe(proc_id, argv0);
-              if (!path.empty()) break;
-              if (slash_pos > colon_pos) {
-                argv0 = tmp + "/" + buffer[0].substr(0, colon_pos);
-                path = is_exe(proc_id, argv0);
-                if (!path.empty()) break;
-              }
-            }
-          }
-          if (path.empty() && !retried) {
-            retried = true;
-            penv = "/usr/bin:/bin:/usr/sbin:/sbin:/usr/X11R6/bin:/usr/local/bin:/usr/local/sbin";
-            std::string home = envvar_value_from_proc_id(proc_id, "HOME");
-            if (!home.empty()) {
-              penv = home + "/bin:" + penv;
-            }
-            goto retry;
-          }
-        }
-        if (path.empty() && slash_pos > 0) {
-          std::string pwd = envvar_value_from_proc_id(proc_id, "PWD");
-          if (!pwd.empty()) {
-            argv0 = pwd + "/" + buffer[0];
-            path = is_exe(proc_id, argv0);
-          }
-          if (path.empty()) {
-            std::string cwd = cwd_from_proc_id(proc_id);
-            if (!cwd.empty()) {
-              argv0 = cwd + "/" + buffer[0];
-              path = is_exe(proc_id, argv0);
-            }
-          }
-        }
-      }
-      if (path.empty() && !error) {
-        error = true;
-        buffer.clear();
-        std::string underscore = envvar_value_from_proc_id(proc_id, "_");
-        if (!underscore.empty()) {
-          buffer.push_back(underscore);
-          goto fallback;
-        }
-      }
-    }
-    if (!path.empty()) {
-      errno = 0;
-    }
-    #elif defined(__sun)
-    char exe[PATH_MAX];
-    if (realpath(("/proc/" + std::to_string(proc_id) + "/path/a.out").c_str(), exe)) {
-      path = exe;
-    }
-    #endif
-    return path;
-  }
-
-  std::string cwd_from_proc_id(NGS_PROCID proc_id) {
-    std::string path;
-    if (proc_id < 0) return path;
-    #if defined(_WIN32)
-    HANDLE proc = open_process_with_debug_privilege(proc_id);
-    if (proc == nullptr) return path;
-    std::vector<wchar_t> buffer = cwd_cmd_env_from_proc(proc, MEMCWD);
-    if (!buffer.empty()) {
-      wchar_t cwd[MAX_PATH];
-      if (_wfullpath(cwd, &buffer[0], MAX_PATH)) {
-        path = narrow(cwd);
-        if (!path.empty() && std::count(path.begin(), path.end(), '\\') > 1 && path.back() == '\\') {
-          path = path.substr(0, path.length() - 1);
-        }
-      }
-    }
-    CloseHandle(proc);
-    #elif (defined(__APPLE__) && defined(__MACH__))
-    proc_vnodepathinfo vpi;
-    if (proc_pidinfo(proc_id, PROC_PIDVNODEPATHINFO, 0, &vpi, sizeof(vpi)) > 0) {
-      char buffer[PATH_MAX];
-      if (realpath(vpi.pvi_cdir.vip_path, buffer)) {
-        path = buffer;
-      }
-    }
-    #elif (defined(__linux__) || defined(__ANDROID__))
-    char cwd[PATH_MAX];
-    if (realpath(("/proc/" + std::to_string(proc_id) + "/cwd").c_str(), cwd)) {
-      path = cwd;
-    }
-    #elif defined(__FreeBSD__)
-    int cntp = 0;
-    kinfo_file *kif = nullptr;
-    kif = kinfo_file_from_proc_id(proc_id, &cntp);
-    if (kif) {
-      for (int i = 0; i < cntp && kif[i].kf_fd < 0; i++) {
-        if (kif[i].kf_fd == KF_FD_TYPE_CWD) {
-          char cwd[PATH_MAX];
-          if (realpath(kif[i].kf_path, cwd)) {
-            path = cwd;
-          }
-        }
-      }
-      free(kif);
-    }
-    #elif defined(__DragonFly__) 
-    FILE *fp = popen(("pos=`ans=\\`/usr/bin/fstat -w -p " + std::to_string(proc_id) + " | /usr/bin/sed -n 1p\\`; " +
-      "/usr/bin/awk -v ans=\"$ans\" 'BEGIN{print index(ans, \"INUM\")}'`; str=`/usr/bin/fstat -w -p " +
-      std::to_string(proc_id) + " | /usr/bin/sed -n 3p`; /usr/bin/awk -v str=\"$str\" -v pos=\"$pos\" " +
-      "'BEGIN{print substr(str, 0, pos + 4)}' | /usr/bin/awk 'NF{NF--};1 {$1=$2=$3=$4=\"\"; print" +
-      " substr($0, 5)'}").c_str(), "r");
+  if (result.empty()) {
+    char buf[1024];
+    FILE *fp = popen("system_profiler SPDisplaysDataType | grep -i 'Chipset Model: ' | uniq | awk -F 'Chipset Model: ' 'NR==1{$1=$1;print}' | awk 'NR==1{$1=$1;print}'", "r");
     if (fp) {
-      char buffer[PATH_MAX];
-      if (fgets(buffer, sizeof(buffer), fp)) {
-        std::string str = buffer;
-        std::size_t pos = str.find("\n", strlen(buffer) - 1);
-        if (pos != std::string::npos) {
-          str.replace(pos, 1, "");
-        }
-        if (realpath(str.c_str(), buffer)) {
-          path = buffer;
-        }
+      if (fgets(buf, sizeof(buf), fp)) {
+        buf[strlen(buf) - 1] = '\0';
+        result = buf;
       }
-      fclose(fp);
+      pclose(fp);
     }
-    #elif defined(__NetBSD__)
-    int mib[4];
-    std::size_t len = 0;
-    mib[0] = CTL_KERN;
-    mib[1] = KERN_PROC_ARGS;
-    mib[2] = proc_id;
-    mib[3] = KERN_PROC_CWD;
-    if (!sysctl(mib, 4, nullptr, &len, nullptr, 0)) {
-      std::vector<char> vecbuff;
-      vecbuff.resize(len);
-      char *cwd = &vecbuff[0];
-      if (!sysctl(mib, 4, cwd, &len, nullptr, 0)) {
-        char buffer[PATH_MAX];
-        if (realpath(cwd, buffer)) {
-          path = buffer;
-        }
-      }
-    }
-    #elif defined(__OpenBSD__)
-    int mib[3];
-    std::size_t len = 0;
-    mib[0] = CTL_KERN;
-    mib[1] = KERN_PROC_CWD;
-    mib[2] = proc_id;
-    if (!sysctl(mib, 3, nullptr, &len, nullptr, 0)) {
-      std::vector<char> vecbuff;
-      vecbuff.resize(len);
-      char *cwd = &vecbuff[0];
-      if (!sysctl(mib, 3, cwd, &len, nullptr, 0)) {
-        char buffer[PATH_MAX];
-        if (realpath(cwd, buffer)) {
-          path = buffer;
-        }
-      }
-    }
-    #elif defined(__sun)
-    char cwd[PATH_MAX];
-    if (realpath(("/proc/" + std::to_string(proc_id) + "/path/cwd").c_str(), cwd)) {
-      path = cwd;
-    }
-    #endif
-    return path;
   }
+  #endif
+  gpurenderer = result;
+  return result;
+}
 
-  std::string comm_from_proc_id(NGS_PROCID proc_id) {
-    std::string exe = exe_from_proc_id(proc_id);
-    if (exe.empty()) return "";
-    #if !defined(_WIN32)
-    std::size_t pos = exe.find_last_of("/");
-    #else
-    std::size_t pos = exe.find_last_of("\\/");
-    #endif
-    if (pos != std::string::npos) {
-      return exe.substr(pos + 1);
+static long long videomemory = -1;
+long long gpu_videomemory() {
+  if (videomemory != -1) return videomemory;
+  long long result = -1;
+  #if defined(_WIN32)
+  IDXGIFactory *pFactory = nullptr;
+  if (CreateDXGIFactory(__uuidof(IDXGIFactory), (void **)&pFactory) == S_OK) {
+    IDXGIAdapter *pAdapter = nullptr;
+    if (pFactory->EnumAdapters(0, &pAdapter) == S_OK) {
+      DXGI_ADAPTER_DESC adapterDesc;
+      if (pAdapter->GetDesc(&adapterDesc) == S_OK) {
+        result = (long long)adapterDesc.DedicatedVideoMemory;
+        if (!result) {
+          result = -1;
+        }
+      }
+      pAdapter->Release();
     }
-    return exe;
+    pFactory->Release();
   }
-
-  std::vector<std::string> cmdline_from_proc_id(NGS_PROCID proc_id) {
-    std::vector<std::string> vec;
-    if (proc_id < 0) return vec;
-    #if defined(_WIN32)
-    HANDLE proc = open_process_with_debug_privilege(proc_id);
-    if (proc == nullptr) return vec;
-    int cmdsize = 0;
-    std::vector<wchar_t> buffer = cwd_cmd_env_from_proc(proc, MEMCMD);
-    if (!buffer.empty()) {
-      wchar_t **cmd = CommandLineToArgvW(&buffer[0], &cmdsize);
-      if (cmd) {
-        for (int i = 0; i < cmdsize; i++) {
-          message_pump();
-          vec.push_back(narrow(cmd[i]));
-        }
-        LocalFree(cmd);
+  #elif (defined(__APPLE__) && defined(__MACH__))
+  char buf[1024];
+  FILE *fp = popen("ioreg -r -d 1 -w 0 -c \"IOAccelerator\" | grep '\"VRAM,totalMB\"' | uniq | awk -F '= ' '{print $2}'", "r");
+  if (fp) {
+    if (fgets(buf, sizeof(buf), fp)) {
+      buf[strlen(buf) - 1] = '\0';
+      if (strlen(buf)) {
+        result = strtoll(buf, nullptr, 10) * 1024 * 1024;
       }
     }
-    CloseHandle(proc);
-    #elif (defined(__APPLE__) && defined(__MACH__))
-    vec = cmd_env_from_proc_id(proc_id, MEMCMD);
-    #elif (defined(__linux__) || defined(__ANDROID__))
-    FILE *file = fopen(("/proc/" + std::to_string(proc_id) + "/cmdline").c_str(), "rb");
-    if (file) {
-      char *cmd = nullptr;
-      std::size_t size = 0;
-      while (getdelim(&cmd, &size, 0, file) != -1) {
-        vec.push_back(cmd);
-      }
-      while (!vec.empty() && vec.back().empty())
-        vec.pop_back();
-      if (cmd) free(cmd);
-      fclose(file);
-    }
-    #elif (defined(__FreeBSD__) || defined(__DragonFly__))
-    int cntp = 0;
-    kvm_t *kd = nullptr;
-    kinfo_proc *proc_info = nullptr;
-    const char *nlistf = "/dev/null";
-    const char *memf   = "/dev/null";
-    kd = kvm_openfiles(nlistf, memf, nullptr, O_RDONLY, nullptr);
-    if (!kd) return vec;
-    if ((proc_info = kvm_getprocs(kd, KERN_PROC_PID, proc_id, &cntp))) {
-      char **cmd = kvm_getargv(kd, proc_info, 0);
-      if (cmd) {
-        for (int i = 0; cmd[i]; i++) {
-          vec.push_back(cmd[i]);
-        }
-      }
-    }
-    kvm_close(kd);
-    #elif defined(__NetBSD__)
-    int cntp = 0;
-    kvm_t *kd = nullptr;
-    kinfo_proc2 *proc_info = nullptr;
-    kd = kvm_openfiles(nullptr, nullptr, nullptr, KVM_NO_FILES, nullptr);
-    if (!kd) return vec;
-    if ((proc_info = kvm_getproc2(kd, KERN_PROC_PID, proc_id, sizeof(struct kinfo_proc2), &cntp))) {
-      char **cmd = kvm_getargv2(kd, proc_info, 0);
-      if (cmd) {
-        for (int i = 0; cmd[i]; i++) {
-          vec.push_back(cmd[i]);
-        }
-      }
-    }
-    kvm_close(kd);
-    #elif defined(__OpenBSD__)
-    int cntp = 0;
-    kvm_t *kd = nullptr;
-    kinfo_proc *proc_info = nullptr;
-    kd = kvm_openfiles(nullptr, nullptr, nullptr, KVM_NO_FILES, nullptr);
-    if (!kd) return vec;
-    if ((proc_info = kvm_getprocs(kd, KERN_PROC_PID, proc_id, sizeof(struct kinfo_proc), &cntp))) {
-      char **cmd = kvm_getargv(kd, proc_info, 0);
-      if (cmd) {
-        for (int i = 0; cmd[i]; i++) {
-          vec.push_back(cmd[i]);
-        }
-      }
-    }
-    kvm_close(kd);
-    #elif defined(__sun)
-    kvm_t *kd = nullptr;
-    char **cmd = nullptr;
-    proc *proc_info = nullptr;
-    user *proc_user = nullptr;
-    kd = kvm_open(nullptr, nullptr, nullptr, O_RDONLY, nullptr);
-    if (!kd) return vec;
-    if ((proc_info = kvm_getproc(kd, proc_id))) {
-      if ((proc_user = kvm_getu(kd, proc_info))) {
-        if (!kvm_getcmd(kd, proc_info, proc_user, &cmd, nullptr)) {
-          for (int i = 0; cmd[i]; i++) {
-            vec.push_back(cmd[i]);
-          }
-          free(cmd);
-        }
-      }
-    }
-    kvm_close(kd);
-    #endif
-    return vec;
+    pclose(fp);
   }
+  #else
+  unsigned int v = 0;
+  PFNGLXQUERYCURRENTRENDERERINTEGERMESAPROC queryInteger;
+  queryInteger = (PFNGLXQUERYCURRENTRENDERERINTEGERMESAPROC)glXGetProcAddressARB((const GLubyte *)"glXQueryCurrentRendererIntegerMESA");
+  queryInteger(GLX_RENDERER_VIDEO_MEMORY_MESA, &v);
+  v = v * 1024 * 1024;
+  if (!v) return -1;
+  result = v;
+  #endif
+  videomemory = result;
+  return result;
+}
 
-  std::vector<std::string> environ_from_proc_id(NGS_PROCID proc_id) {
-    std::vector<std::string> vec;
-    if (proc_id < 0) return vec;
-    #if defined(_WIN32)
-    HANDLE proc = open_process_with_debug_privilege(proc_id);
-    if (proc == nullptr) return vec;
-    std::vector<wchar_t> buffer = cwd_cmd_env_from_proc(proc, MEMENV);
-    int i = 0;
-    if (!buffer.empty()) {
-      while (buffer[i] != L'\0') {
-        message_pump();
-        vec.push_back(narrow(&buffer[i]));
-        i += (int)(wcslen(&buffer[0] + i) + 1);
-      }
-    }
-    CloseHandle(proc);
-    #elif (defined(__APPLE__) && defined(__MACH__))
-    vec = cmd_env_from_proc_id(proc_id, MEMENV);
-    #elif (defined(__linux__) || defined(__ANDROID__))
-    FILE *file = fopen(("/proc/" + std::to_string(proc_id) + "/environ").c_str(), "rb");
-    if (file) {
-      char *env = nullptr;
-      std::size_t size = 0;
-      while (getdelim(&env, &size, 0, file) != -1) {
-        vec.push_back(env);
-      }
-      if (env) free(env);
-      fclose(file);
-    }
-    #elif (defined(__FreeBSD__) || defined(__DragonFly__))
-    int cntp = 0;
-    kvm_t *kd = nullptr;
-    kinfo_proc *proc_info = nullptr;
-    const char *nlistf = "/dev/null";
-    const char *memf   = "/dev/null";
-    kd = kvm_openfiles(nlistf, memf, nullptr, O_RDONLY, nullptr);
-    if (!kd) return vec;
-    if ((proc_info = kvm_getprocs(kd, KERN_PROC_PID, proc_id, &cntp))) {
-      char **env = kvm_getenvv(kd, proc_info, 0);
-      if (env) {
-        for (int i = 0; env[i]; i++) {
-          vec.push_back(env[i]);
-        }
-      }
-    }
-    kvm_close(kd);
-    #elif defined(__NetBSD__)
-    int cntp = 0;
-    kvm_t *kd = nullptr;
-    kinfo_proc2 *proc_info = nullptr;
-    kd = kvm_openfiles(nullptr, nullptr, nullptr, KVM_NO_FILES, nullptr);
-    if (!kd) return vec;
-    if ((proc_info = kvm_getproc2(kd, KERN_PROC_PID, proc_id, sizeof(struct kinfo_proc2), &cntp))) {
-      char **env = kvm_getenvv2(kd, proc_info, 0);
-      if (env) {
-        for (int i = 0; env[i]; i++) {
-          vec.push_back(env[i]);
-        }
-      }
-    }
-    kvm_close(kd);
-    #elif defined(__OpenBSD__)
-    int cntp = 0;
-    kvm_t *kd = nullptr;
-    kinfo_proc *proc_info = nullptr;
-    kd = kvm_openfiles(nullptr, nullptr, nullptr, KVM_NO_FILES, nullptr);
-    if (!kd) return vec;
-    if ((proc_info = kvm_getprocs(kd, KERN_PROC_PID, proc_id, sizeof(struct kinfo_proc), &cntp))) {
-      char **env = kvm_getenvv(kd, proc_info, 0);
-      if (env) {
-        for (int i = 0; env[i]; i++) {
-          vec.push_back(env[i]);
-        }
-      }
-    }
-    kvm_close(kd);
-    #elif defined(__sun)
-    kvm_t *kd = nullptr;
-    char **env = nullptr;
-    proc *proc_info = nullptr;
-    user *proc_user = nullptr;
-    kd = kvm_open(nullptr, nullptr, nullptr, O_RDONLY, nullptr);
-    if (!kd) return vec;
-    if ((proc_info = kvm_getproc(kd, proc_id))) {
-      if ((proc_user = kvm_getu(kd, proc_info))) {
-        if (!kvm_getcmd(kd, proc_info, proc_user, nullptr, &env)) {
-          for (int i = 0; env[i]; i++) {
-            vec.push_back(env[i]);
-          }
-          free(env);
-        }
-      }
-    }
-    kvm_close(kd);
-    #endif
-    struct is_invalid {
-      bool operator()(const std::string &s) {
-        return (s.find('=') == std::string::npos);
-      }
-    };
-    vec.erase(std::remove_if(vec.begin(), vec.end(), is_invalid()), vec.end());
-    return vec;
+std::string cpu_vendor() {
+  #if defined(_WIN32)
+  const char *result = nullptr;
+  char buf[1024];
+  DWORD sz = sizeof(buf);
+  if (RegGetValueA(HKEY_LOCAL_MACHINE, "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0\\", "VendorIdentifier", RRF_RT_REG_SZ, nullptr, &buf, &sz) == ERROR_SUCCESS) {
+    result = buf;
   }
+  return result ? result : "";
+  #elif (defined(__APPLE__) && defined(__MACH__))
+  const char *result = nullptr;
+  char buf[1024];
+  std::size_t len = sizeof(buf);
+  if (!sysctlbyname("machdep.cpu.vendor", &buf, &len, nullptr, 0)) {
+    result = buf;
+  }
+  return result ? result : "";
+  #elif defined(__linux__)
+  char buf[1024];
+  const char *result = nullptr;
+  FILE *fp = popen("lscpu | grep 'Vendor ID:' | uniq | cut -d' ' -f3- | awk 'NR==1{$1=$1;print}'", "r");
+  if (fp) {
+    if (fgets(buf, sizeof(buf), fp)) {
+      buf[strlen(buf) - 1] = '\0';
+      result = buf;
+    }
+    pclose(fp);
+    static std::string str;
+    str = result ? result : "";
+    return str;
+  }
+  return "";
+  #elif defined(__FreeBSD__)
+  char buf[1024];
+  const char *result = nullptr;
+  FILE *fp = popen("dmesg | awk '/CPU: /{p++;if(p==0){next}}p' | awk -F'Origin=\"' 'NR==2{print $0}' | sed 's/.*Origin=\"//g' | awk -F' ' '{print $1}' | awk -F',' '{print $1}' | awk '{print substr($0, 1, length($0) - 1)}'", "r");
+  if (fp) {
+    if (fgets(buf, sizeof(buf), fp)) {
+      buf[strlen(buf) - 1] = '\0';
+      result = buf;
+    }
+    pclose(fp);
+    static std::string str;
+    str = result ? result : "";
+    return str;
+  }
+  return "";
+  #elif defined(__DragonFly__)
+  char buf[1024];
+  const char *result = nullptr;
+  FILE *fp = popen("dmesg | awk '/CPU: /{p++;if(p==0){next}}p' | awk -F'Origin = \"' 'NR==2{print $0}' | sed 's/.*Origin = \"//g' | awk -F' ' '{print $1}' | awk -F',' '{print $1}' | awk '{print substr($0, 1, length($0) - 1)}'", "r");
+  if (fp) {
+    if (fgets(buf, sizeof(buf), fp)) {
+      buf[strlen(buf) - 1] = '\0';
+      result = buf;
+    }
+    pclose(fp);
+    static std::string str;
+    str = result ? result : "";
+    return str;
+  }
+  return "";
+  #elif defined(__NetBSD__)
+  char buf[1024];
+  const char *result = nullptr;
+  FILE *fp = popen("cat /proc/cpuinfo | grep 'vendor_id' | awk 'NR==1{print $3}'", "r");
+  if (fp) {
+    if (fgets(buf, sizeof(buf), fp)) {
+      buf[strlen(buf) - 1] = '\0';
+      result = buf;
+    }
+    pclose(fp);
+    static std::string str;
+    str = result ? result : "";
+    return str;
+  }
+  return "";
+  #elif defined(__OpenBSD__)
+  char buf[1024];
+  const char *result = nullptr;
+  FILE *fp = popen("sysctl -n machdep.cpuvendor", "r");
+  if (fp) {
+    if (fgets(buf, sizeof(buf), fp)) {
+      buf[strlen(buf) - 1] = '\0';
+      result = buf;
+    }
+    pclose(fp);
+    static std::string str;
+    str = result ? result : "";
+    return str;
+  }
+  return "";
+  #elif defined(__sun)
+  char buf[1024];
+  const char *result = nullptr;
+  FILE *fp = popen("psrinfo -v -p | awk 'NR==2{print substr($2, 2)}'", "r");
+  if (fp) {
+    if (fgets(buf, sizeof(buf), fp)) {
+      buf[strlen(buf) - 1] = '\0';
+      result = buf;
+    }
+    pclose(fp);
+    static std::string str;
+    str = result ? result : "";
+    return str;
+  }
+  return "";
+  #else
+  return "";
+  #endif
+}
 
-  std::string envvar_value_from_proc_id(NGS_PROCID proc_id, std::string name) {
-    std::string value;
-    if (proc_id < 0 || name.empty()) return value;
-    std::vector<std::string> vec = environ_from_proc_id(proc_id);
-    if (!vec.empty()) {
-      for (std::size_t i = 0; i < vec.size(); i++) {
-        message_pump();
-        std::vector<std::string> equalssplit = string_split_by_first_equals_sign(vec[i]);
-        if (equalssplit.size() == 2) {
-          #if defined(_WIN32)
-          std::transform(equalssplit[0].begin(), equalssplit[0].end(), equalssplit[0].begin(), ::toupper);
-          std::transform(name.begin(), name.end(), name.begin(), ::toupper);
-          #endif
-          if (equalssplit[0] == name) {
-            value = equalssplit[1];
-            break;
-          }
+std::string cpu_brand() {
+  #if defined(_WIN32)
+  const char *result = nullptr;
+  char buf[1024];
+  DWORD sz = sizeof(buf);
+  if (RegGetValueA(HKEY_LOCAL_MACHINE, "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0\\", "ProcessorNameString", RRF_RT_REG_SZ, nullptr, &buf, &sz) == ERROR_SUCCESS) {
+    result = buf;
+  }
+  return result ? result : "";
+  #elif (defined(__APPLE__) && defined(__MACH__))
+  const char *result = nullptr;
+  char buf[1024];
+  std::size_t len = sizeof(buf);
+  if (!sysctlbyname("machdep.cpu.brand_string", &buf, &len, nullptr, 0)) {
+    result = buf;
+  }
+  return result ? result : "";
+  #elif defined(__linux__)
+  char buf[1024];
+  const char *result = nullptr;
+  FILE *fp = popen("lscpu | grep 'Model name:' | uniq | cut -d' ' -f3- | awk 'NR==1{$1=$1;print}'", "r");
+  if (fp) {
+    if (fgets(buf, sizeof(buf), fp)) {
+      buf[strlen(buf) - 1] = '\0';
+      result = buf;
+    }
+    pclose(fp);
+    static std::string str;
+    str = result ? result : "";
+    return str;
+  }
+  return "";
+  #elif (defined(__FreeBSD__) || defined(__DragonFly__) || defined(__NetBSD__) || defined(__OpenBSD__))
+  int mib[2];
+  char buf[1024];
+  mib[0] = CTL_HW;
+  mib[1] = HW_MODEL;
+  std::size_t len = sizeof(buf);
+  if (!sysctl(mib, 2, buf, &len, nullptr, 0)) {
+    return strlen(buf) ? buf : "";
+  }
+  return "";
+  #elif defined(__sun)
+  char buf[1024];
+  const char *result = nullptr;
+  FILE *fp = popen("psrinfo -v -p | awk 'NR==3{print}' | awk 'NR==1{$1=$1;print}''", "r");
+  if (fp) {
+    if (fgets(buf, sizeof(buf), fp)) {
+      buf[strlen(buf) - 1] = '\0';
+      result = buf;
+    }
+    pclose(fp);
+  }
+  static std::string str;
+  str = result ? result : "";
+  return str;
+  #else
+  return "";
+  #endif
+}
+
+static int numcores = -1;
+int cpu_numcores() {
+  if (numcores != -1) {
+    return numcores;
+  }
+  #if defined(_WIN32)
+  std::string result = read_output(L"wmic cpu get NumberOfCores");
+  if (!result.empty()) {
+    result = std::regex_replace(result, std::regex("NumberOfCores"), "");
+    result = std::regex_replace(result, std::regex(" "), "");
+    result = std::regex_replace(result, std::regex("\r"), "");
+    result = std::regex_replace(result, std::regex("\n"), "");
+    static std::string res;
+    res = result;
+    numcores = (int)strtol(res.c_str(), nullptr, 10);
+  }
+  return numcores;
+  #elif (defined(__APPLE__) && defined(__MACH__))
+  int physical_cpus = -1;
+  std::size_t len = sizeof(int);
+  if (!sysctlbyname("machdep.cpu.core_count", &physical_cpus, &len, nullptr, 0)) {
+    numcores = physical_cpus;
+  }
+  return numcores;
+  #elif defined(__linux__)
+  char buf[1024];
+  const char *result = nullptr;
+  FILE *fp = popen("lscpu | grep 'Thread(s) per core:' | uniq | cut -d' ' -f4- | awk 'NR==1{$1=$1;print}'", "r");
+  if (fp) {
+    if (fgets(buf, sizeof(buf), fp)) {
+      buf[strlen(buf) - 1] = '\0';
+      result = buf;
+    }
+    pclose(fp);
+    static std::string str;
+    str = (result && strlen(result)) ? result : "-1";
+    numcores = (int)(cpu_numcpus() / strtol(str.c_str(), nullptr, 10));
+  }
+  return numcores;
+  #elif defined(__FreeBSD__)
+  char buf[1024];
+  const char *result = nullptr;
+  FILE *fp = popen("sysctl -n kern.sched.topology_spec | grep -c 'THREAD group'", "r");
+  if (fp) {
+    if (fgets(buf, sizeof(buf), fp)) {
+      buf[strlen(buf) - 1] = '\0';
+      result = buf;
+    }
+    pclose(fp);
+    static std::string str;
+    str = (result && strlen(result)) ? result : "-1";
+    numcores = (int)strtol(str.c_str(), nullptr, 10);
+    numcores = ((!numcores) ? cpu_numcpus() : numcores);
+  }
+  return numcores;
+  #elif defined(__DragonFly__)
+  char buf[1024];
+  const char *result = nullptr;
+  FILE *fp = popen("dmesg | grep 'threads_per_core: ' | awk '{print substr($6, 0, length($6) - 1)}'", "r");
+  if (fp) {
+    if (fgets(buf, sizeof(buf), fp)) {
+      buf[strlen(buf) - 1] = '\0';
+      result = buf;
+    }
+    pclose(fp);
+    static std::string str;
+    str = (result && strlen(result)) ? result : "-1";
+    numcores = (int)(cpu_numcpus() / strtol(str.c_str(), nullptr, 10));
+  }
+  return numcores;
+  #elif (defined(__NetBSD__) || defined(__OpenBSD__))
+  class CPUID {
+    unsigned regs[4];
+    public:
+    explicit CPUID(unsigned funcId, unsigned subFuncId) {
+      asm volatile ("cpuid" : "=a" (regs[0]), "=b" (regs[1]), "=c" (regs[2]), "=d" (regs[3]) : "a" (funcId), "c" (subFuncId));
+    }
+    const unsigned &EAX() const { return regs[0]; }
+    const unsigned &EBX() const { return regs[1]; }
+    const unsigned &ECX() const { return regs[2]; }
+    const unsigned &EDX() const { return regs[3]; }
+  };
+  static const unsigned AVX_POS = 0x10000000;
+  static const unsigned LVL_NUM = 0x000000FF;
+  static const unsigned LVL_CORES = 0x0000FFFF;
+  CPUID cpuID0(0, 0);
+  unsigned HFS = cpuID0.EAX();
+  CPUID cpuID1(1, 0);
+  int mNumSMT = 0;
+  int mNumCores = 0;
+  bool mIsHTT = cpuID1.EDX() & AVX_POS;
+  std::string cpuvendor = cpu_vendor();
+  int numcpus = cpu_numcpus();
+  if (cpuvendor == "GenuineIntel") {
+    if(HFS >= 11) {
+      CPUID cpuID4(0x0B, 0);
+      mNumSMT = LVL_CORES & cpuID4.EBX();
+      mNumCores = numcpus / mNumSMT;
+    } else {
+      if (HFS >= 1) {
+        if (HFS >= 4) {
+          mNumCores = 1 + (CPUID(4, 0).EAX() >> 26) & 0x3F;
         }
       }
-    }
-    return value;
-  }
-
-  bool envvar_exists_from_proc_id(NGS_PROCID proc_id, std::string name) {
-    bool exists = false;
-    if (proc_id < 0 || name.empty()) return exists;
-    std::vector<std::string> vec = environ_from_proc_id(proc_id);
-    if (!vec.empty()) {
-      for (std::size_t i = 0; i < vec.size(); i++) {
-        message_pump();
-        std::vector<std::string> equalssplit = string_split_by_first_equals_sign(vec[i]);
-        if (!equalssplit.empty()) {
-          #if defined(_WIN32)
-          std::transform(equalssplit[0].begin(), equalssplit[0].end(), equalssplit[0].begin(), ::toupper);
-          std::transform(name.begin(), name.end(), name.begin(), ::toupper);
-          #endif
-          if (equalssplit[0] == name) {
-            exists = true;
-            break;
-          }
+      if (mIsHTT) {
+        if (mNumCores < 1) {
+          mNumCores = 1;
         }
-      }
-    }
-    return exists;
-  }
-
-  namespace {
-
-    std::unordered_map<NGS_PROCID, std::intptr_t> stdipt_map;
-    std::unordered_map<NGS_PROCID, std::string> stdopt_map;
-    std::unordered_map<NGS_PROCID, bool> complete_map;
-    std::unordered_map<int, NGS_PROCID> child_proc_id;
-    std::unordered_map<int, bool> proc_did_execute;
-    std::string standard_input;
-    std::mutex stdopt_mutex;
-    int index = -1;
-
-    #if !defined(_WIN32)
-    NGS_PROCID process_execute_helper(const char *command, int *infp, int *outfp) {
-      int p_stdin[2];
-      int p_stdout[2];
-      NGS_PROCID pid = -1;
-      if (pipe(p_stdin) == -1)
-        return -1;
-      if (pipe(p_stdout) == -1) {
-        close(p_stdin[0]);
-        close(p_stdin[1]);
-        return -1;
-      }
-      pid = fork();
-      if (pid < 0) {
-        close(p_stdin[0]);
-        close(p_stdin[1]);
-        close(p_stdout[0]);
-        close(p_stdout[1]);
-        return pid;
-      } else if (pid == 0) {
-        close(p_stdin[1]);
-        dup2(p_stdin[0], 0);
-        close(p_stdout[0]);
-        dup2(p_stdout[1], 1);
-        dup2(p_stdout[1], 2);
-        for (int i = 3; i < 4096; i++)
-          close(i);
-        setsid();
-        #if !defined(__ANDROID__)
-        execl("/bin/sh", "sh", "-c", command, nullptr);
-        #else
-        execl("/system/bin/sh", "sh", "-c", command, nullptr);
-        #endif
-        _exit(-1);
-      }
-      close(p_stdin[0]);
-      close(p_stdout[1]);
-      if (infp == nullptr) {
-        close(p_stdin[1]);
       } else {
-        *infp = p_stdin[1];
-      }
-      if (outfp == nullptr) {
-        close(p_stdout[0]);
-      } else {
-        *outfp = p_stdout[0];
-      }
-      return pid;
-    }
-    #endif
-
-    void output_thread(std::intptr_t file, NGS_PROCID proc_index) {
-      #if !defined(_WIN32)
-      ssize_t nRead = 0; char buffer[BUFSIZ];
-      while ((nRead = read((int)file, buffer, BUFSIZ)) > 0) {
-        buffer[nRead] = '\0';
-      #else
-      DWORD nRead = 0; char buffer[BUFSIZ];
-      while (ReadFile((HANDLE)(void *)file, buffer, BUFSIZ, &nRead, nullptr) && nRead) {
-        message_pump();
-        buffer[nRead] = '\0';
-      #endif
-        std::lock_guard<std::mutex> guard(stdopt_mutex);
-        stdopt_map[proc_index].append(buffer, nRead);
+        mNumCores = 1;
       }
     }
-
-    #if !defined(_WIN32)
-    NGS_PROCID proc_id_from_fork_proc_id(NGS_PROCID proc_id) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(5));
-      std::vector<NGS_PROCID> ppid = proc_id_from_parent_proc_id(proc_id);
-      if (!ppid.empty()) proc_id = ppid[0];
-      return proc_id;
-    }
-    #endif
-
-    NGS_PROCID spawn_child_proc_id_helper(std::string command) {
-      index++;
-      #if !defined(_WIN32)
-      int infd = 0, outfd = 0;
-      NGS_PROCID proc_id = 0, fork_proc_id = 0, wait_proc_id = 0;
-      fork_proc_id = process_execute_helper(command.c_str(), &infd, &outfd);
-      proc_id = fork_proc_id; wait_proc_id = proc_id;
-      std::this_thread::sleep_for(std::chrono::milliseconds(5));
-      if (fork_proc_id != -1) {
-        while ((proc_id = proc_id_from_fork_proc_id(proc_id)) == wait_proc_id) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(5));
-          int status = 0; wait_proc_id = waitpid(fork_proc_id, &status, WNOHANG);
-          std::string exe = exe_from_proc_id(fork_proc_id);
-          if (exe.empty()) {
-            break;
-          }
-          char shlbuf[PATH_MAX];
-          #if !defined(__ANDROID__)
-          const char *shl = "/bin/sh";
-          #else
-          const char *shl = "/system/bin/sh";
-          #endif
-          if (realpath(shl, shlbuf)) {
-            if (strcmp(exe.c_str(), shlbuf) == 0) {
-              if (wait_proc_id > 0)
-                proc_id = wait_proc_id;
-            } else {
-              break;
-            }
-          } else {
-            break;
-          }
+  } else if (cpuvendor == "AuthenticAMD" || cpuvendor == "AMDisbetter!") {
+    mNumSMT = 1 + ((CPUID(0x8000001e, 0).EBX() >> 8) & 0xff);
+    if (numcpus > 0 && mNumSMT > 0) {
+      mNumCores = numcpus / mNumSMT;
+    } else {
+      if (HFS >= 1) {
+        if (CPUID(0x80000000, 0).EAX() >= 8) {
+          mNumCores = 1 + (CPUID(0x80000008, 0).ECX() & 0xFF);
         }
       }
-      child_proc_id[index] = proc_id; std::this_thread::sleep_for(std::chrono::milliseconds(5));
-      proc_did_execute[index] = true; NGS_PROCID proc_index = proc_id;
-      stdipt_map[proc_index] = (std::intptr_t)infd;
-      std::thread opt_thread(output_thread, (std::intptr_t)outfd, proc_index);
-      opt_thread.join();
-      #else
-      std::wstring wstr_command = widen(command); bool proceed = true;
-      wchar_t *cwstr_command = new wchar_t[wstr_command.length() + 1]();
-      wcsncpy_s(cwstr_command, wstr_command.length() + 1, wstr_command.c_str(), wstr_command.length() + 1);
-      HANDLE stdin_read = nullptr; HANDLE stdin_write = nullptr;
-      HANDLE stdout_read = nullptr; HANDLE stdout_write = nullptr;
-      SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES), nullptr, true };
-      proceed = CreatePipe(&stdin_read, &stdin_write, &sa, 0);
-      if (proceed == false) return 0;
-      SetHandleInformation(stdin_write, HANDLE_FLAG_INHERIT, 0);
-      proceed = CreatePipe(&stdout_read, &stdout_write, &sa, 0);
-      if (proceed == false) return 0;
-      STARTUPINFOW si;
-      ZeroMemory(&si, sizeof(si));
-      si.cb = sizeof(STARTUPINFOW);
-      si.dwFlags = STARTF_USESTDHANDLES;
-      si.hStdError = stdout_write;
-      si.hStdOutput = stdout_write;
-      si.hStdInput = stdin_read;
-      PROCESS_INFORMATION pi; ZeroMemory(&pi, sizeof(pi)); NGS_PROCID proc_index = 0;
-      BOOL success = CreateProcessW(nullptr, cwstr_command, nullptr, nullptr, true, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
-      delete[] cwstr_command;
-      if (success) {
-        CloseHandle(stdout_write);
-        CloseHandle(stdin_read);
-        NGS_PROCID proc_id = pi.dwProcessId; child_proc_id[index] = proc_id; proc_index = proc_id;
-        std::this_thread::sleep_for(std::chrono::milliseconds(5)); proc_did_execute[index] = true;
-        stdipt_map[proc_index] = (std::intptr_t)(void *)stdin_write;
-        HANDLE wait_handles[] = { pi.hProcess, stdout_read };
-        std::thread opt_thread(output_thread, (std::intptr_t)(void *)stdout_read, proc_index);
-        while (MsgWaitForMultipleObjects(2, wait_handles, false, 5, QS_ALLEVENTS) != WAIT_OBJECT_0) {
-          message_pump();
+      if (mIsHTT) {
+        if (mNumCores < 1) {
+          mNumCores = 1;
         }
-        opt_thread.join();
-        CloseHandle(pi.hProcess);
-        CloseHandle(pi.hThread);
-        CloseHandle(stdout_read);
-        CloseHandle(stdin_write);
       } else {
-        proc_did_execute[index] = true;
-        child_proc_id[index] = 0;
-      }
-      #endif
-      std::this_thread::sleep_for(std::chrono::milliseconds(100));
-      complete_map[proc_index] = true;
-      return proc_index;
-    }
-
-  } // anonymous namespace
-
-  NGS_PROCID spawn_child_proc_id(std::string command, bool wait) {
-    if (wait) return spawn_child_proc_id_helper(command);
-    int prevIndex = index;
-    std::thread proc_thread(spawn_child_proc_id_helper, command);
-    while (prevIndex == index) {
-      message_pump();
-      std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    }
-    while (proc_did_execute.find(index) == proc_did_execute.end() || !proc_did_execute[index]) {
-      message_pump();
-      std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    }
-    NGS_PROCID proc_index = child_proc_id[index];
-    complete_map[proc_index] = false;
-    proc_thread.detach();
-    return proc_index;
-  }
-
-  std::string read_from_stdout_for_child_proc_id(NGS_PROCID proc_id) {
-    if (stdopt_map.find(proc_id) == stdopt_map.end()) return "";
-    std::lock_guard<std::mutex> guard(stdopt_mutex);
-    return stdopt_map.find(proc_id)->second.c_str();
-  }
-
-  long long write_to_stdin_for_child_proc_id(NGS_PROCID proc_id, std::string input) {
-    if (stdipt_map.find(proc_id) == stdipt_map.end()) return -1;
-    std::string s = input;
-    std::vector<char> v(s.length());
-    std::copy(s.c_str(), s.c_str() + s.length(), v.begin());
-    #if !defined(_WIN32)
-    ssize_t nwritten = -1;
-    lseek((int)stdipt_map[proc_id], 0, SEEK_END);
-    nwritten = write((int)stdipt_map[proc_id], &v[0], v.size());
-    return nwritten;
-    #else
-    DWORD dwwritten = -1;
-    SetFilePointer((HANDLE)(void *)stdipt_map[proc_id], 0, nullptr, FILE_END);
-    WriteFile((HANDLE)(void *)stdipt_map[proc_id], &v[0], (DWORD)v.size(), &dwwritten, nullptr);
-    return (((long long)(DWORD)-1 != (long long)dwwritten) ? dwwritten : -1);
-    #endif
-  }
-
-  bool child_proc_id_is_complete(NGS_PROCID proc_id) {
-    if (complete_map.find(proc_id) == complete_map.end()) return false;
-    return complete_map.find(proc_id)->second;
-  }
-
-  std::string read_from_stdin_for_self() {
-    standard_input = "";
-    #if defined(_WIN32)
-    DWORD bytes_avail = 0;
-    HANDLE hpipe = GetStdHandle(STD_INPUT_HANDLE);
-    if (PeekNamedPipe(hpipe, nullptr, 0, nullptr, &bytes_avail, nullptr)) {
-      DWORD bytes_read = 0;
-      std::string buffer; buffer.resize(bytes_avail, '\0');
-      if (PeekNamedPipe(hpipe, &buffer[0], bytes_avail, &bytes_read, nullptr, nullptr)) {
-        standard_input = buffer;
+        mNumCores = 1;
       }
     }
-    #else
-    char buffer[BUFSIZ]; ssize_t nread = 0;
-    int flags = fcntl(STDIN_FILENO, F_GETFL, 0); if (-1 == flags) return "";
-    while ((nread = read(fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK), buffer, BUFSIZ)) > 0) {
-      buffer[nread] = '\0';
-      standard_input.append(buffer, nread);
+  }
+  if (mNumCores > 0) {
+    numcores = mNumCores;
+  }
+  return numcores;
+  #elif defined(__sun)
+  char buf[1024];
+  const char *result = nullptr;
+  FILE *fp = popen("echo `expr $(kstat cpu_info | grep 'pkg_core_id' | uniq | wc -l | awk '{print $1}') / $(psrinfo -p)`", "r");
+  if (fp) {
+    if (fgets(buf, sizeof(buf), fp)) {
+      buf[strlen(buf) - 1] = '\0';
+      result = buf;
     }
-    #endif
-    return standard_input.c_str();
+    pclose(fp);
+    static std::string str;
+    str = (result && strlen(result)) ? result : "-1";
+    numcores = (int)strtol(str.c_str(), nullptr, 10);
   }
+  return numcores;
+  #else
+  return -1;
+  #endif
+}
 
-  bool free_stdout_for_child_proc_id(NGS_PROCID proc_id) {
-    if (stdopt_map.find(proc_id) == stdopt_map.end()) return false;
-    stdopt_map.erase(proc_id);
-    return true;
+int cpu_numcpus() {
+  #if defined(_WIN32)
+  int numcpus = -1;
+  SYSTEM_INFO sysinfo;
+  GetSystemInfo(&sysinfo);
+  numcpus = sysinfo.dwNumberOfProcessors;
+  return numcpus;
+  #elif (defined(__APPLE__) && defined(__MACH__))
+  int numcpus = -1;
+  int logical_cpus = -1;
+  std::size_t len = sizeof(int);
+  if (!sysctlbyname("machdep.cpu.thread_count", &logical_cpus, &len, nullptr, 0)) {
+    numcpus = logical_cpus;
   }
-
-  bool free_stdin_for_child_proc_id(NGS_PROCID proc_id) {
-    if (stdipt_map.find(proc_id) == stdipt_map.end()) return false;
-    stdipt_map.erase(proc_id);
-    return true;
+  return numcpus;
+  #elif defined(__linux__)
+  int numcpus = -1;
+  char buf[1024];
+  const char *result = nullptr;
+  FILE *fp = popen("lscpu | grep 'CPU(s):' | uniq | cut -d' ' -f4- | awk 'NR==1{$1=$1;print}'", "r");
+  if (fp) {
+    if (fgets(buf, sizeof(buf), fp)) {
+      buf[strlen(buf) - 1] = '\0';
+      result = buf;
+    }
+    pclose(fp);
+    static std::string str;
+    str = (result && strlen(result)) ? result : "-1";
+    numcpus = (int)strtol(str.c_str(), nullptr, 10);
   }
+  return numcpus;
+  #elif (defined(__FreeBSD__) || defined(__DragonFly__) || defined(__NetBSD__) || defined(__OpenBSD__))
+  int numcpus = -1;
+  int mib[2];
+  mib[0] = CTL_HW;
+  mib[1] = HW_NCPU;
+  int logical_cpus = -1;
+  std::size_t len = sizeof(int);
+  if (!sysctl(mib, 2, &logical_cpus, &len, nullptr, 0)) {
+    numcpus = logical_cpus;
+  }
+  return numcpus;
+  #elif defined(__sun)
+  int numcpus = -1;
+  char buf[1024];
+  const char *result = nullptr;
+  FILE *fp = popen("psrinfo -v -p | grep 'The physical processor has ' | awk '{print $5}'", "r");
+  if (fp) {
+    if (fgets(buf, sizeof(buf), fp)) {
+      buf[strlen(buf) - 1] = '\0';
+      result = buf;
+    }
+    pclose(fp);
+    static std::string str;
+    str = (result && strlen(result)) ? result : "-1";
+    numcpus = (int)strtol(str.c_str(), nullptr, 10);
+  }
+  return numcpus;
+  #else
+  return -1;
+  #endif
+}
 
-} // namespace ngs::ps
+} // namespace ngs::sys
