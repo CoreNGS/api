@@ -1633,21 +1633,34 @@ namespace ngs::ps {
   std::string read_from_stdin_for_self() {
     standard_input = "";
     #if defined(_WIN32)
+    std::vector<char> buff;
     DWORD bytes_avail = 0;
-    HANDLE hpipe = GetStdHandle(STD_INPUT_HANDLE);
-    if (PeekNamedPipe(hpipe, nullptr, 0, nullptr, &bytes_avail, nullptr)) {
-      DWORD bytes_read = 0;
-      std::string buffer; buffer.resize(bytes_avail, '\0');
-      if (PeekNamedPipe(hpipe, &buffer[0], bytes_avail, &bytes_read, nullptr, nullptr)) {
-        standard_input = buffer;
+    HANDLE handle = GetStdHandle(STD_INPUT_HANDLE);
+    if (GetFileType(handle) == FILE_TYPE_PIPE) {
+      if (PeekNamedPipe(handle, nullptr, 0, nullptr, &bytes_avail, nullptr)) {
+        DWORD bytes_read = 0;
+        buff.resize(bytes_avail);
+        if (PeekNamedPipe(handle, &buff[0], bytes_avail, &bytes_read, nullptr, nullptr)) {
+          standard_input = buff.data();
+        }
+      }
+    } else {
+      DWORD nRead = BUFSIZ;
+      buff.resize(nRead);
+      while (ReadFile(handle, &buff[0], nRead, &nRead, nullptr) && nRead) {
+        message_pump();
+        standard_input.append(buff.data(), nRead);
       }
     }
     #else
-    char buffer[BUFSIZ]; ssize_t nread = 0;
-    int flags = fcntl(STDIN_FILENO, F_GETFL, 0); if (-1 == flags) return "";
-    while ((nread = read(fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK), buffer, BUFSIZ)) > 0) {
-      buffer[nread] = '\0';
-      standard_input.append(buffer, nread);
+    std::vector<char> buff;
+    ssize_t nread = BUFSIZ;
+    int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
+    if (flags != -1) {
+      buff.resize(nread);
+      while ((nread = read(fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK), &buff[0], nread)) > 0) {
+        standard_input.append(buff.data(), nread);
+      }
     }
     #endif
     return standard_input.c_str();
