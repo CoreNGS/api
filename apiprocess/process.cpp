@@ -252,9 +252,7 @@ namespace {
     buffer[len / 2] = L'\0';
     return buffer;
   }
-  #endif
-
-  #if (defined(__APPLE__) && defined(__MACH__))
+  #elif (defined(__APPLE__) && defined(__MACH__))
   enum MEMTYP {
     MEMCMD,
     MEMENV
@@ -313,58 +311,6 @@ namespace {
     }
     free(procargs);
     return vec;
-  }
-  #elif defined(__FreeBSD__)
-  kinfo_file *kinfo_file_from_proc_id(ngs::ps::NGS_PROCID proc_id, int *cntp) {
-    *cntp = 0;
-    int cnt = 0;
-    std::size_t len = 0;
-    char *buf = nullptr, *bp = nullptr, *eb = nullptr;
-    kinfo_file *kif = nullptr, *kp = nullptr, *kf = nullptr;
-    int mib[4];
-    mib[0] = CTL_KERN;
-    mib[1] = KERN_PROC;
-    mib[2] = KERN_PROC_FILEDESC;
-    mib[3] = proc_id;
-    if (sysctl(mib, 4, nullptr, &len, nullptr, 0)) {
-      return nullptr;
-    }
-    len = len * 4 / 3;
-    buf = (char *)malloc(len);
-    if (!buf) {
-      return nullptr;
-    }
-    if (sysctl(mib, 4, buf, &len, nullptr, 0)) {
-      free(buf);
-      return nullptr;
-    }
-    bp = buf;
-    eb = buf + len;
-    while (bp < eb) {
-      kf = (kinfo_file *)(std::uintptr_t)bp;
-      if (!kf->kf_structsize) break;
-      bp += kf->kf_structsize;
-      cnt++;
-    }
-    kif = (kinfo_file *)calloc(cnt, sizeof(*kif));
-    if (!kif) {
-      free(buf);
-      return nullptr;
-    }
-    bp = buf;
-    eb = buf + len;
-    kp = kif;
-    while (bp < eb) {
-      kf = (kinfo_file *)(std::uintptr_t)bp;
-      if (!kf->kf_structsize) break;
-      memcpy(kp, kf, kf->kf_structsize);
-      bp += kf->kf_structsize;
-      kp->kf_structsize = sizeof(*kp);
-      kp++;
-    }
-    free(buf);
-    *cntp = cnt;
-    return kif;
   }
   #endif
 
@@ -1044,7 +990,25 @@ namespace ngs::ps {
     if (realpath(("/proc/" + std::to_string(proc_id) + "/cwd").c_str(), cwd)) {
       path = cwd;
     }
-    #elif (defined(__FreeBSD__) || defined(__DragonFly__))
+    #elif defined(__FreeBSD__)
+    int mib[4];
+    struct kinfo_file kif;
+    std::size_t len = sizeof(kif);
+    mib[0] = CTL_KERN;
+    mib[1] = KERN_PROC;
+    mib[2] = KERN_PROC_CWD;
+    mib[3] = proc_id;
+    if (!sysctl(mib, 4, nullptr, &len, nullptr, 0)) {
+      memset(&kif, 0, len);
+      if (!sysctl(mib, 4, &kif, &len, nullptr, 0)) {
+        path = kif.kf_path;
+        char buffer[PATH_MAX];
+        if (realpath(path.c_str(), buffer)) {
+           path = buffer;
+        }
+      }
+    }
+    #elif defined(__DragonFly__)
     int mib[4];
     std::size_t len = 0;
     mib[0] = CTL_KERN;
@@ -1064,22 +1028,6 @@ namespace ngs::ps {
     }
     if (!path.empty())
       return path;
-    #if defined(__FreeBSD__)
-    int cntp = 0;
-    kinfo_file *kif = nullptr;
-    kif = kinfo_file_from_proc_id(proc_id, &cntp);
-    if (kif) {
-      for (int i = 0; i < cntp && kif[i].kf_fd < 0; i++) {
-        if (kif[i].kf_fd == KF_FD_TYPE_CWD) {
-          char cwd[PATH_MAX];
-          if (realpath(kif[i].kf_path, cwd)) {
-            path = cwd;
-          }
-        }
-      }
-      free(kif);
-    }
-    #elif defined(__DragonFly__)
     FILE *fp = popen(("pos=`ans=\\`/usr/bin/fstat -w -p " + std::to_string(proc_id) + " | /usr/bin/sed -n 1p\\`; " +
       "/usr/bin/awk -v ans=\"$ans\" 'BEGIN{print index(ans, \"INUM\")}'`; str=`/usr/bin/fstat -w -p " +
       std::to_string(proc_id) + " | /usr/bin/sed -n 3p`; /usr/bin/awk -v str=\"$str\" -v pos=\"$pos\" " +
@@ -1099,7 +1047,6 @@ namespace ngs::ps {
       }
       fclose(fp);
     }
-    #endif
     #elif defined(__NetBSD__)
     int mib[4];
     std::size_t len = 0;
