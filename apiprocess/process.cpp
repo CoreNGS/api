@@ -1532,7 +1532,7 @@ namespace ngs::ps {
       si.cb = sizeof(STARTUPINFOW);
       si.dwFlags = STARTF_USESTDHANDLES;
       #if defined(NULLIFY_STDERR)
-      si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+      si.hStdError = nullptr;
       #else
       si.hStdError = stdout_write;
       #endif
@@ -1540,6 +1540,7 @@ namespace ngs::ps {
       si.hStdInput = stdin_read;
       PROCESS_INFORMATION pi; ZeroMemory(&pi, sizeof(pi)); NGS_PROCID proc_index = 0;
       BOOL success = CreateProcessW(nullptr, cwstr_command, nullptr, nullptr, true, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+      complete_map[pi.dwProcessId] = false;
       delete[] cwstr_command;
       if (success) {
         CloseHandle(stdout_write);
