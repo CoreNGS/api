@@ -85,9 +85,9 @@
 #endif
 #if defined(USE_SDL_POLLEVENT)
 #if defined(_MSC_VER)
-#if (defined(_WIN32) && !defined(_WIN64))
+#if defined(_WIN32) && !defined(_WIN64)
 #pragma comment(lib, __FILE__"\\..\\lib\\x86\\SDL2.lib")
-#elif (defined(_WIN32) && defined(_WIN64))
+#elif defined(_WIN32) && defined(_WIN64)
 #pragma comment(lib, __FILE__"\\..\\lib\\x64\\SDL2.lib")
 #endif
 #endif
@@ -1510,12 +1510,10 @@ namespace ngs::ps {
           }
         }
       }
-      child_proc_id[index] = proc_id;
-      NGS_PROCID proc_index = proc_id;
+      child_proc_id[index] = proc_id; std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      proc_did_execute[index] = true; NGS_PROCID proc_index = proc_id;
       stdipt_map[proc_index] = (std::intptr_t)infd;
       std::thread opt_thread(output_thread, (std::intptr_t)outfd, proc_index);
-      std::this_thread::sleep_for(std::chrono::milliseconds(5));
-      proc_did_execute[index] = true;
       opt_thread.join();
       #else
       std::wstring wstr_command = widen(command); bool proceed = true;
@@ -1546,18 +1544,14 @@ namespace ngs::ps {
       if (success) {
         CloseHandle(stdout_write);
         CloseHandle(stdin_read);
-        NGS_PROCID proc_id = pi.dwProcessId; 
-        child_proc_id[index] = proc_id;
-        proc_index = proc_id; 
-        complete_map[proc_index] = false;
+        NGS_PROCID proc_id = pi.dwProcessId; child_proc_id[index] = proc_id; proc_index = proc_id;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5)); proc_did_execute[index] = true;
         stdipt_map[proc_index] = (std::intptr_t)(void *)stdin_write;
         HANDLE wait_handles[] = { pi.hProcess, stdout_read };
         std::thread opt_thread(output_thread, (std::intptr_t)(void *)stdout_read, proc_index);
         while (MsgWaitForMultipleObjects(2, wait_handles, false, 5, QS_ALLEVENTS) != WAIT_OBJECT_0) {
           message_pump();
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        proc_did_execute[index] = true;
         opt_thread.join();
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
