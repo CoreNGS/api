@@ -1540,17 +1540,20 @@ namespace ngs::ps {
       si.hStdInput = stdin_read;
       PROCESS_INFORMATION pi; ZeroMemory(&pi, sizeof(pi)); NGS_PROCID proc_index = 0;
       BOOL success = CreateProcessW(nullptr, cwstr_command, nullptr, nullptr, true, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
-      complete_map[pi.dwProcessId] = false;
       delete[] cwstr_command;
       if (success) {
         CloseHandle(stdout_write);
         CloseHandle(stdin_read);
-        NGS_PROCID proc_id = pi.dwProcessId; child_proc_id[index] = proc_id; proc_index = proc_id;
-        std::this_thread::sleep_for(std::chrono::milliseconds(5)); proc_did_execute[index] = true;
+        NGS_PROCID proc_id = pi.dwProcessId; 
+        child_proc_id[index] = proc_id;
+        proc_index = proc_id; 
+        complete_map[proc_index] = false;
         stdipt_map[proc_index] = (std::intptr_t)(void *)stdin_write;
         HANDLE wait_handles[] = { pi.hProcess, stdout_read };
         std::thread opt_thread(output_thread, (std::intptr_t)(void *)stdout_read, proc_index);
+        std::this_thread::sleep_for(std::chrono::milliseconds(15)); 
         while (MsgWaitForMultipleObjects(2, wait_handles, false, 5, QS_ALLEVENTS) != WAIT_OBJECT_0) {
+          proc_did_execute[index] = true;
           message_pump();
         }
         opt_thread.join();
