@@ -957,8 +957,8 @@ std::string memory_usedram(bool human_readable) {
   mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
   vm_statistics64_data_t vmstat;
   if (host_statistics64(mach_host_self(), HOST_VM_INFO64, (host_info64_t)&vmstat, &count) == KERN_SUCCESS) {
-    if (((long long)(vmstat.active_count + vmstat.wire_count) * (long long)page_s))
-      usedram = ((long long)(vmstat.active_count + vmstat.wire_count) * (long long)page_s);
+    // https://github.com/apple-opensource/top/blob/e7979606cf63270663a62cfe69f82d35cef9ba58/globalstats.c#L433-L434
+    usedram = ((long long)(vmstat.wire_count + vmstat.inactive_count + vmstat.active_count + vmstat.compressor_page_count) * (long long)page_s);
   }
   #elif (defined(__linux__) || defined(__FreeBSD__) || defined(__DragonFly__) || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__sun))
   std::string strtotal = memory_totalram(false);
