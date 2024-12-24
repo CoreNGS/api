@@ -895,7 +895,7 @@ std::string memory_totalram(bool human_readable) {
   if (!sysctl(mib, 2, &buf, &sz, nullptr, 0))
     totalram = buf.npages * sysconf(_SC_PAGESIZE);
   #elif defined(__sun)
-  totalram = strtoll(read_output("prtconf | grep 'Memory size:' | uniq | cut -d' ' -f3- | awk '{print $1 * 1024};'").c_str(), nullptr, 10) * 1024;
+  totalram = (sysconf(_SC_PHYS_PAGES) * sysconf(_SC_PAGESIZE));
   #endif
   if (!totalram)
     totalram = -1;
